@@ -7,6 +7,8 @@ from email import policy
 from bs4 import BeautifulSoup
 from datetime import datetime
 import dateparser
+import os
+from dotenv import load_dotenv
 from kcls_hold_gtasks import add_hold_to_google
 
 today = datetime.now().astimezone()
@@ -29,8 +31,9 @@ else:
     print("Could not connect to the internet after 10 attempts. Exiting script.")
     exit()
 
-email_address = "sammand72@gmail.com"
-app_password = "buyz fwfx kqxq etal"
+load_dotenv()
+email_address = os.getenv('EMAIL_USER')
+app_password = os.getenv('EMAIL_PASS')
 mail.login(email_address, app_password)
 
 # to choose mailbox- default is inbox
