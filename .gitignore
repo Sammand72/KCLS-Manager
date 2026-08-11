@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-# Ignore Google API Keys and users list
-=======
 # Ignore Google API Keys and user IDs
->>>>>>> f40d382 (Added a users.json file to track all users, while keeping the code free of account numbers.)
 credentials.json
 token.json
 users.json

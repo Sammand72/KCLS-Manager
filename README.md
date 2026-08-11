@@ -13,6 +13,9 @@ You will need Python 3 installed, along with the following libraries:
 ```bash
 pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib beautifulsoup4 dateparser python-dotenv
 ```
+Note: On linux instead of pip you may use apt. 
+
+## Other files
 * **credentials.json**- contains Google Cloud OAuth 2.0 Client ID
 *  **users.json**- contains account numbers mapped to user
 * **.env**- contains email id and app password for the email being monitored
@@ -20,6 +23,6 @@ pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib b
 Add all 4 of these to the .gitignore
 
 ## Miscellaneous
-The script needs to generate the token.json so the first run has to be manual. It will open a browser window with a login page.
+The script needs to generate the token.json so the first run has to be manual. It will open a browser window with a login page. The name of the tasklist I've set it to is "KCLS Library Holds". It can be changed to anything inside add_hold_to_google in kcls_hold_gtasks.py.
 
 Code partly made with Google Gemini 3.1 Pro 
