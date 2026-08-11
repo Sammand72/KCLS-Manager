@@ -1,0 +1,11 @@
+# Ignore Google API Keys and users list
+credentials.json
+token.json
+users.json
+
+# Ignore log files and environment variables
+library_bot_log.txt
+.env
+
+# Ignore Python cache files (Python creates these automatically)
+__pycache__/
