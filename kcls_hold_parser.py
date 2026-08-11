@@ -1,6 +1,7 @@
 # Python3 code to scan my inbox for emails from King County Library System, find hold details and upload to Google tasks
 
 import time
+import json
 import imaplib
 import email
 from email import policy
@@ -59,6 +60,10 @@ if email_ids:
     # 'message_from_bytes' instead of 'message_from_binary_file' since already in memory
     msg = email.message_from_bytes(raw_email_bytes, policy=policy.default)
 
+    # Load the users configuration file
+    with open('users.json', 'r') as file:
+        user_mapping = json.load(file)
+
     print(f"\n\n{msg['subject']}")
     # print("\n--- Email Body ---")
 
@@ -98,13 +103,19 @@ if email_ids:
                         # print(f"Title:    {current_hold['title']}")
 
                     if current_line == "Account:":
-                        current_hold["account_number"] = lines[i+1]
+                        account_number = lines[i+1]
+                        current_hold["account_number"] = account_number
 
+<<<<<<< HEAD
                         if current_hold["account_number"] == "0000000000":
                             user = "KCLS"
 
                         else:
                             user = "Unknown user"
+=======
+                        # Looks up the account number in users.json, defaults to "Unknown user" if user not found
+                        user = user_mapping.get(account_number, "Unknown user")
+>>>>>>> f40d382 (Added a users.json file to track all users, while keeping the code free of account numbers.)
 
                         current_hold["user"] = user
                         # print(f"Account:  {current_hold['account_number']} ({user})")
