@@ -9,20 +9,34 @@ A headless Python automation script that silently monitors an email inbox for Ki
 * Designed to run silently on startup via Windows Task Scheduler/Linux Cron with a log routed.
 
 ## Dependencies
-You will need Python 3 installed, along with the following libraries:
+You will need Python 3 installed. It's recommended to use a virtual environment so these packages stay separate from your system Python:
 ```bash
-pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib beautifulsoup4 dateparser python-dotenv
+python3 -m venv .venv
+source .venv/bin/activate   # on Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
-Note: On linux instead of pip you may use apt. 
+Remember to select the `.venv` interpreter in your editor too (in VS Code: Ctrl+Shift+P -> "Python: Select Interpreter"), otherwise it won't recognize the installed packages even though they're there.
 
-## Other files
+Note: On linux instead of pip you may use apt to install the underlying libraries system-wide, but that won't work inside a venv. 
+
+### Other files
 * **credentials.json**- contains Google Cloud OAuth 2.0 Client ID
 *  **users.json**- contains account numbers mapped to user
-* **.env**- contains email id and app password for the email being monitored
+* **.env**- contains email id and app password for the email being monitored, plus:
+  * **TASK_MANAGER**- set to `google` or `todoist` to choose which task manager holds get pushed to (defaults to `google` if unset)
+  * **TODOIST_API_TOKEN**- your Todoist personal API token (only needed if TASK_MANAGER=todoist)
 * (**token.json** is created automatically)
 Add all 4 of these to the .gitignore
 
-## Miscellaneous
+## Task managers
+This script can push holds to either Google Tasks or Todoist, but never both at once - set `TASK_MANAGER` in `.env` to pick one.
+
+### Google Tasks
 The script needs to generate the token.json so the first run has to be manual. It will open a browser window with a login page. The name of the tasklist I've set it to is "KCLS Library Holds". It can be changed to anything inside add_hold_to_google in kcls_hold_gtasks.py.
 
-Code partly made with Google Gemini 3.1 Pro 
+### Todoist
+Get your API token from the Todoist app under Settings -> Integrations -> Developer, and put it in `.env` as `TODOIST_API_TOKEN`. No browser login step is needed. The name of the project I've set it to is "KCLS Stuff". It can be changed to anything inside add_hold_to_todoist in kcls_hold_todoist.py. If no project with that name is found, the hold is pushed to your Todoist Inbox instead.
+
+## Miscellaneous
+
+Code partly made with Google Gemini 3.1 Pro and Claude Code
