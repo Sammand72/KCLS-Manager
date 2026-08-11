@@ -11,6 +11,7 @@ import dateparser
 import os
 from dotenv import load_dotenv
 from kcls_hold_gtasks import add_hold_to_google
+from kcls_hold_todoist import add_hold_to_todoist
 
 today = datetime.now().astimezone()
 print(
@@ -36,6 +37,10 @@ load_dotenv()
 email_address = os.getenv('EMAIL_USER')
 app_password = os.getenv('EMAIL_PASS')
 mail.login(email_address, app_password)
+
+# Which task manager to push holds to: "google" or "todoist"
+task_manager = os.getenv('TASK_MANAGER', 'google').lower()
+print(f"Uploading tasks to "+task_manager)
 
 # to choose mailbox- default is inbox
 mail.select('inbox')
@@ -145,13 +150,22 @@ if email_ids:
             print(
                 f"Deadline: {hold['str_deadline']}\n")
 
-            add_hold_to_google(
-                book_title=hold['title'],
-                author=hold['author'],
-                location=hold['location'],
-                account_user=hold['user'],
-                deadline_datetime=hold['deadline']
-            )
+            if task_manager == 'todoist':
+                add_hold_to_todoist(
+                    book_title=hold['title'],
+                    author=hold['author'],
+                    location=hold['location'],
+                    account_user=hold['user'],
+                    deadline_datetime=hold['deadline']
+                )
+            else:
+                add_hold_to_google(
+                    book_title=hold['title'],
+                    author=hold['author'],
+                    location=hold['location'],
+                    account_user=hold['user'],
+                    deadline_datetime=hold['deadline']
+                )
 
             mail.store(latest_email_id, '+FLAGS', '\\Seen')
             print("Email marked as READ")

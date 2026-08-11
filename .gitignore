@@ -9,3 +9,6 @@ library_bot_log.txt
 
 # Ignore Python cache files (Python creates these automatically)
 __pycache__/
+
+# Ignore the virtual environment
+.venv/
