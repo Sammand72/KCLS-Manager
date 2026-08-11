@@ -106,16 +106,8 @@ if email_ids:
                         account_number = lines[i+1]
                         current_hold["account_number"] = account_number
 
-<<<<<<< HEAD
-                        if current_hold["account_number"] == "0000000000":
-                            user = "KCLS"
-
-                        else:
-                            user = "Unknown user"
-=======
                         # Looks up the account number in users.json, defaults to "Unknown user" if user not found
                         user = user_mapping.get(account_number, "Unknown user")
->>>>>>> f40d382 (Added a users.json file to track all users, while keeping the code free of account numbers.)
 
                         current_hold["user"] = user
                         # print(f"Account:  {current_hold['account_number']} ({user})")
