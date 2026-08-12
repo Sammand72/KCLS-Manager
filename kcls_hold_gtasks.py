@@ -81,3 +81,35 @@ def add_hold_to_google(book_title, author, location, account_user, deadline_date
     result = service.tasks().insert(
         tasklist=target_list_id, body=task_payload).execute()
     print("Success!")
+
+
+def mark_hold_complete_google(book_title):
+    # Connect to Google
+    service = authenticate_google_tasks()
+
+    target_list_id = get_tasklist_id(service, "KCLS Library Holds")
+
+    # showCompleted=False so we only ever match against still-pending pickups
+    results = service.tasks().list(
+        tasklist=target_list_id, showCompleted=False).execute()
+    tasks = results.get('items', [])
+
+    # Lowercase + strip so small formatting differences don't break the match
+    normalized_checkout_title = book_title.lower().strip()
+
+    for task in tasks:
+        normalized_task_title = task['title'].lower().strip()
+
+        # Bidirectional substring check: the checkout receipt's title may
+        # include a subtitle (after a colon) that the hold task doesn't, or vice versa
+        if normalized_checkout_title in normalized_task_title or normalized_task_title in normalized_checkout_title:
+            print(f"\nMarking '{task['title']}' complete in Google Tasks...")
+            service.tasks().patch(
+                tasklist=target_list_id,
+                task=task['id'],
+                body={'status': 'completed'}
+            ).execute()
+            print("Success!")
+            return
+
+    print(f"\nNo matching Google Tasks hold found for '{book_title}' (probably wasn't on hold).")

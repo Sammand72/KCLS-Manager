@@ -10,8 +10,8 @@ from datetime import datetime
 import dateparser
 import os
 from dotenv import load_dotenv
-from kcls_hold_gtasks import add_hold_to_google
-from kcls_hold_todoist import add_hold_to_todoist
+from kcls_hold_gtasks import add_hold_to_google, mark_hold_complete_google
+from kcls_hold_todoist import add_hold_to_todoist, mark_hold_complete_todoist
 
 today = datetime.now().astimezone()
 print(
@@ -40,7 +40,7 @@ mail.login(email_address, app_password)
 
 # Which task manager to push holds to: "google" or "todoist"
 task_manager = os.getenv('TASK_MANAGER', 'google').lower()
-print(f"Uploading tasks to "+task_manager)
+print(f"Selected Task Manager: "+task_manager)
 
 # to choose mailbox- default is inbox
 mail.select('inbox')
@@ -69,7 +69,7 @@ if email_ids:
     with open('users.json', 'r') as file:
         user_mapping = json.load(file)
 
-    print(f"\n\n{msg['subject']}")
+    print(f"\n{msg['subject']}")
     # print("\n--- Email Body ---")
 
     # multipart= txt+html, singlepart= txt or html only
@@ -139,7 +139,7 @@ if email_ids:
                 break
 
     if all_holds:
-        print(f"\n\n--- Library Hold Details (Count: {len(all_holds)}) ---\n")
+        print(f"--- Library Hold Details (Count: {len(all_holds)}) ---\n")
         hold_count = 1
         for hold in all_holds:
             print(f"Hold {hold_count}")
@@ -175,5 +175,90 @@ if email_ids:
 
 else:
     print("No unread KCLS hold mails found!")
+
+# --- Checkout receipts: find checked-out books and mark any matching hold task complete ---
+
+status, receipt_messages = mail.search(
+    None, '(FROM "noreply@kcls.org")', 'UNSEEN', '(SUBJECT "Checkout Receipt")')
+
+receipt_email_ids = receipt_messages[0].split()
+
+if receipt_email_ids:
+    latest_receipt_id = receipt_email_ids[-1]  # -1 is latest, 0 is oldest
+
+    status, data = mail.fetch(latest_receipt_id, '(RFC822)')
+    raw_email_bytes = data[0][1]
+    receipt_msg = email.message_from_bytes(
+        raw_email_bytes, policy=policy.default)
+
+    print(f"\n{receipt_msg['subject']}")
+
+    checked_out_books = []
+
+    # Unlike the hold email, this one isn't always multipart (txt+html) -
+    # it can arrive as a single text/html part, or even a single text/plain
+    # part with no HTML at all, so we handle whichever one shows up
+    raw_html = None
+    raw_text = None
+    if receipt_msg.is_multipart():
+        for part in receipt_msg.walk():
+            if part.get_content_type() == "text/html":
+                raw_html = part.get_content()
+            elif part.get_content_type() == "text/plain":
+                raw_text = part.get_content()
+    elif receipt_msg.get_content_type() == "text/html":
+        raw_html = receipt_msg.get_content()
+    elif receipt_msg.get_content_type() == "text/plain":
+        raw_text = receipt_msg.get_content()
+
+    if raw_html:
+        # HTML body - strip the tags down to plain text first
+        soup = BeautifulSoup(raw_html, 'html.parser')
+        clean_text = soup.get_text(separator='\n', strip=True)
+    else:
+        clean_text = raw_text
+
+    if clean_text:
+        current_book = {}
+
+        for current_line in clean_text.splitlines():
+            # On this email the label and its value are on the same line,
+            # e.g. "1. Title: The social animal : the hidden sources of love..."
+            # so we split on the label instead of reading the next line
+            if "Title:" in current_line:
+                if "title" in current_book:
+                    checked_out_books.append(current_book)
+                    current_book = {}  # empty current_book to start new book
+
+                current_book["title"] = current_line.split("Title:", 1)[
+                    1].strip()
+
+            elif "Author:" in current_line:
+                current_book["author"] = current_line.split("Author:", 1)[
+                    1].strip()
+
+        if "title" in current_book:
+            # add the last book to the list of checked_out_books
+            checked_out_books.append(current_book)
+
+    if checked_out_books:
+        print(
+            f"--- Checkout Receipt Details (Count: {len(checked_out_books)}) ---\n")
+        for book in checked_out_books:
+            print(f"Book:   {book['title']}")
+            print(f"Author: {book.get('author', 'Unknown')}\n")
+
+            if task_manager == 'todoist':
+                mark_hold_complete_todoist(book_title=book['title'])
+            else:
+                mark_hold_complete_google(book_title=book['title'])
+
+        mail.store(latest_receipt_id, '+FLAGS', '\\Seen')
+        print("Checkout receipt email marked as READ")
+    else:
+        print(receipt_msg.get_content())
+
+else:
+    print("No unread KCLS checkout receipt mails found!")
 
 mail.logout()
