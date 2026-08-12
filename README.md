@@ -2,10 +2,13 @@
 
 A headless Python automation script that silently monitors an email inbox for King County Library System (KCLS) "Hold is Ready" emails. It parses the email for book titles, authors, pickup locations, and deadlines, and automatically pushes them to a specific Google Tasks list. 
 
+It also watches for KCLS "Checkout Receipt" emails: when a receipt comes in, it matches each checked-out book against your pending hold tasks (by title) and marks the matching task complete. Books on the receipt that were never on hold are left alone.
+
 ## Features
 * Uses IMAP to find unread automated library emails.
 * Handles multiple books in a single email and calculates days remaining until the deadline.
 * Maps different library card numbers to specific family members.
+* Auto-completes hold tasks when the corresponding book shows up on a checkout receipt (THIS REQUIRES YOU TO CLICK ON 'EMAIL RECIEPT' WHEN CHECKING BOOKS OUT)
 * Designed to run silently on startup via Windows Task Scheduler/Linux Cron with a log routed.
 
 ## Dependencies
@@ -38,5 +41,11 @@ The script needs to generate the token.json so the first run has to be manual. I
 Get your API token from the Todoist app under Settings -> Integrations -> Developer, and put it in `.env` as `TODOIST_API_TOKEN`. No browser login step is needed. The name of the project I've set it to is "KCLS Stuff". It can be changed to anything inside add_hold_to_todoist in kcls_hold_todoist.py. If no project with that name is found, the hold is pushed to your Todoist Inbox instead.
 
 ## Miscellaneous
+### Current Limitations and future plans
+* The code cannot scan several unread emails, just the latest one
+* Due dates aren't supported yet but will be in a future update along with automatic book due task completion using check in emails.
+* An expired hold triggers a known bug which will be fixed. 
+* Code is unoptimized because I am a beginner
+
 
 Code partly made with Google Gemini 3.1 Pro and Claude Code
