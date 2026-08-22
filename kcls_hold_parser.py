@@ -47,131 +47,139 @@ mail.select('inbox')
 
 # None is defualt charset, status is OK or NO
 status, messages = mail.search(
-    None, '(FROM "noreply@kcls.org")', 'UNSEEN', '(SUBJECT "Your Hold")')
+    None, '(FROM "noreply@kcls.org")', 'UNSEEN',
+    '(OR (SUBJECT "Hold is Ready") (SUBJECT "Holds are Ready"))')
 
 # messages[0] is a byte string of email IDs, we split it into a list of individual email IDs
 # .split() makes a list separated by spaces into one separated by commas
 email_ids = messages[0].split()
 
 if email_ids:
-    latest_email_id = email_ids[-1]  # -1 is latest, 0 is oldest
-
-    # RFC822 is standard and means whole email
-    status, data = mail.fetch(latest_email_id, '(RFC822)')
-
-    # extract raw email bytes from data list in given position
-    raw_email_bytes = data[0][1]
-
-    # 'message_from_bytes' instead of 'message_from_binary_file' since already in memory
-    msg = email.message_from_bytes(raw_email_bytes, policy=policy.default)
+    print(f"Found {len(email_ids)} unread hold email(s)")
 
     # Load the users configuration file
     with open('users.json', 'r') as file:
         user_mapping = json.load(file)
 
-    print(f"\n{msg['subject']}")
-    # print("\n--- Email Body ---")
+    hold_count = 0
 
-    # multipart= txt+html, singlepart= txt or html only
-    if msg.is_multipart():
+    # go through every unread hold email, oldest first, instead of only the latest one
+    for current_email_id in email_ids:
 
-        all_holds = []
+        # RFC822 is standard and means whole email
+        status, data = mail.fetch(current_email_id, '(RFC822)')
 
-        for part in msg.walk():
-            if part.get_content_type() == "text/html":
-                raw_html = part.get_content()
+        # extract raw email bytes from data list in given position
+        raw_email_bytes = data[0][1]
 
-                # parsed
-                soup = BeautifulSoup(raw_html, 'html.parser')
+        # 'message_from_bytes' instead of 'message_from_binary_file' since already in memory
+        msg = email.message_from_bytes(raw_email_bytes, policy=policy.default)
 
-                # separator='\n' makes sure there is a new line where tags used to be, strip removes all tags
-                clean_text = soup.get_text(separator='\n', strip=True)
+        print(f"\n{msg['subject']}")
+        # print("\n--- Email Body ---")
 
-                # print(clean_text)
+        # holds found in this specific email
+        email_holds = []
 
-                current_hold = {}
+        # multipart= txt+html, singlepart= txt or html only
+        if msg.is_multipart():
 
-                # Convert the text into a list of lines so we can loop through them
-                lines = clean_text.splitlines()
+            for part in msg.walk():
+                if part.get_content_type() == "text/html":
+                    raw_html = part.get_content()
 
-                # loop which finds label and grabs line under that with actual data
-                for i in range(len(lines)):
-                    current_line = lines[i]
+                    # parsed
+                    soup = BeautifulSoup(raw_html, 'html.parser')
 
-                    # If current book already has a title we go to next book and save current book to all_holds
-                    if current_line == "Title":
-                        if "title" in current_hold:
-                            all_holds.append(current_hold)
-                            current_hold = {}  # empty current_book to start new book
+                    # separator='\n' makes sure there is a new line where tags used to be, strip removes all tags
+                    clean_text = soup.get_text(separator='\n', strip=True)
 
-                        current_hold["title"] = lines[i+1]
-                        # print(f"Title:    {current_hold['title']}")
+                    # print(clean_text)
 
-                    if current_line == "Account:":
-                        account_number = lines[i+1]
-                        current_hold["account_number"] = account_number
+                    current_hold = {}
 
-                        # Looks up the account number in users.json, defaults to "Unknown user" if user not found
-                        user = user_mapping.get(account_number, "Unknown user")
+                    # Convert the text into a list of lines so we can loop through them
+                    lines = clean_text.splitlines()
 
-                        current_hold["user"] = user
-                        # print(f"Account:  {current_hold['account_number']} ({user})")
+                    # loop which finds label and grabs line under that with actual data
+                    for i in range(len(lines)):
+                        current_line = lines[i]
 
-                    elif current_line == "Author":
-                        current_hold["author"] = lines[i+1]
-                        # print(f"Author:   {current_hold['author']}")
+                        # If current book already has a title we go to next book and save current book to email_holds
+                        if current_line == "Title":
+                            if "title" in current_hold:
+                                email_holds.append(current_hold)
+                                current_hold = {}  # empty current_book to start new book
 
-                    elif current_line == "Pickup Location":
-                        current_hold["location"] = lines[i+1]
-                        # print(f"Location: {current_hold['location']}")
+                            current_hold["title"] = lines[i+1]
+                            # print(f"Title:    {current_hold['title']}")
 
-                    elif current_line == "Pickup by":
-                        current_hold["deadline"] = dateparser.parse(
-                            lines[i+1], settings={'TIMEZONE': 'US/Pacific', 'RETURN_AS_TIMEZONE_AWARE': True})
+                        if current_line == "Account:":
+                            account_number = lines[i+1]
+                            current_hold["account_number"] = account_number
 
-                        current_hold['str_deadline'] = lines[i+1]
-                        # print(f"Deadline: {lines[i+1]} (Pickup in {(current_hold['deadline'] - today).days} days)")
+                            # Looks up the account number in users.json, defaults to "Unknown user" if user not found
+                            user = user_mapping.get(
+                                account_number, "Unknown user")
 
-                if "title" in current_hold:
-                    # add the last book to the list of all_holds
-                    all_holds.append(current_hold)
+                            current_hold["user"] = user
+                            # print(f"Account:  {current_hold['account_number']} ({user})")
 
-                break
+                        elif current_line == "Author":
+                            current_hold["author"] = lines[i+1]
+                            # print(f"Author:   {current_hold['author']}")
 
-    if all_holds:
-        print(f"--- Library Hold Details (Count: {len(all_holds)}) ---\n")
-        hold_count = 1
-        for hold in all_holds:
-            print(f"Hold {hold_count}")
-            print(f"Account:  {hold['account_number']} ({hold['user']})")
-            print(f"Book:     {hold['title']}")
-            print(f"Author:   {hold['author']}")
-            print(f"Location: {hold['location']}")
+                        elif current_line == "Pickup Location":
+                            current_hold["location"] = lines[i+1]
+                            # print(f"Location: {current_hold['location']}")
+
+                        elif current_line == "Pickup by":
+                            current_hold["deadline"] = dateparser.parse(
+                                lines[i+1], settings={'TIMEZONE': 'US/Pacific', 'RETURN_AS_TIMEZONE_AWARE': True})
+
+                            current_hold['str_deadline'] = lines[i+1]
+                            # print(f"Deadline: {lines[i+1]} (Pickup in {(current_hold['deadline'] - today).days} days)")
+
+                    if "title" in current_hold:
+                        # add the last book to the list of email_holds
+                        email_holds.append(current_hold)
+
+                    break
+
+        if email_holds:
             print(
-                f"Deadline: {hold['str_deadline']}\n")
+                f"--- Library Hold Details (Count: {len(email_holds)}) ---\n")
+            for hold in email_holds:
+                hold_count += 1
+                print(f"Hold {hold_count}")
+                print(f"Account:  {hold['account_number']} ({hold['user']})")
+                print(f"Book:     {hold['title']}")
+                print(f"Author:   {hold['author']}")
+                print(f"Location: {hold['location']}")
+                print(
+                    f"Deadline: {hold['str_deadline']}\n")
 
-            if task_manager == 'todoist':
-                add_hold_to_todoist(
-                    book_title=hold['title'],
-                    author=hold['author'],
-                    location=hold['location'],
-                    account_user=hold['user'],
-                    deadline_datetime=hold['deadline']
-                )
-            else:
-                add_hold_to_google(
-                    book_title=hold['title'],
-                    author=hold['author'],
-                    location=hold['location'],
-                    account_user=hold['user'],
-                    deadline_datetime=hold['deadline']
-                )
+                if task_manager == 'todoist':
+                    add_hold_to_todoist(
+                        book_title=hold['title'],
+                        author=hold['author'],
+                        location=hold['location'],
+                        account_user=hold['user'],
+                        deadline_datetime=hold['deadline']
+                    )
+                else:
+                    add_hold_to_google(
+                        book_title=hold['title'],
+                        author=hold['author'],
+                        location=hold['location'],
+                        account_user=hold['user'],
+                        deadline_datetime=hold['deadline']
+                    )
 
-            mail.store(latest_email_id, '+FLAGS', '\\Seen')
+            mail.store(current_email_id, '+FLAGS', '\\Seen')
             print("Email marked as READ")
-    else:
-        print(msg.get_content())
-
+        else:
+            print(msg.get_content())
 
 else:
     print("No unread KCLS hold mails found!")
@@ -184,79 +192,82 @@ status, receipt_messages = mail.search(
 receipt_email_ids = receipt_messages[0].split()
 
 if receipt_email_ids:
-    latest_receipt_id = receipt_email_ids[-1]  # -1 is latest, 0 is oldest
+    print(f"Found {len(receipt_email_ids)} unread checkout receipt email(s)")
 
-    status, data = mail.fetch(latest_receipt_id, '(RFC822)')
-    raw_email_bytes = data[0][1]
-    receipt_msg = email.message_from_bytes(
-        raw_email_bytes, policy=policy.default)
+    # go through every unread checkout receipt email, oldest first, instead of only the latest one
+    for current_receipt_id in receipt_email_ids:
 
-    print(f"\n{receipt_msg['subject']}")
+        status, data = mail.fetch(current_receipt_id, '(RFC822)')
+        raw_email_bytes = data[0][1]
+        receipt_msg = email.message_from_bytes(
+            raw_email_bytes, policy=policy.default)
 
-    checked_out_books = []
+        print(f"\n{receipt_msg['subject']}")
 
-    # Unlike the hold email, this one isn't always multipart (txt+html) -
-    # it can arrive as a single text/html part, or even a single text/plain
-    # part with no HTML at all, so we handle whichever one shows up
-    raw_html = None
-    raw_text = None
-    if receipt_msg.is_multipart():
-        for part in receipt_msg.walk():
-            if part.get_content_type() == "text/html":
-                raw_html = part.get_content()
-            elif part.get_content_type() == "text/plain":
-                raw_text = part.get_content()
-    elif receipt_msg.get_content_type() == "text/html":
-        raw_html = receipt_msg.get_content()
-    elif receipt_msg.get_content_type() == "text/plain":
-        raw_text = receipt_msg.get_content()
+        checked_out_books = []
 
-    if raw_html:
-        # HTML body - strip the tags down to plain text first
-        soup = BeautifulSoup(raw_html, 'html.parser')
-        clean_text = soup.get_text(separator='\n', strip=True)
-    else:
-        clean_text = raw_text
+        # Unlike the hold email, this one isn't always multipart (txt+html) -
+        # it can arrive as a single text/html part, or even a single text/plain
+        # part with no HTML at all, so we handle whichever one shows up
+        raw_html = None
+        raw_text = None
+        if receipt_msg.is_multipart():
+            for part in receipt_msg.walk():
+                if part.get_content_type() == "text/html":
+                    raw_html = part.get_content()
+                elif part.get_content_type() == "text/plain":
+                    raw_text = part.get_content()
+        elif receipt_msg.get_content_type() == "text/html":
+            raw_html = receipt_msg.get_content()
+        elif receipt_msg.get_content_type() == "text/plain":
+            raw_text = receipt_msg.get_content()
 
-    if clean_text:
-        current_book = {}
+        if raw_html:
+            # HTML body - strip the tags down to plain text first
+            soup = BeautifulSoup(raw_html, 'html.parser')
+            clean_text = soup.get_text(separator='\n', strip=True)
+        else:
+            clean_text = raw_text
 
-        for current_line in clean_text.splitlines():
-            # On this email the label and its value are on the same line,
-            # e.g. "1. Title: The social animal : the hidden sources of love..."
-            # so we split on the label instead of reading the next line
-            if "Title:" in current_line:
-                if "title" in current_book:
-                    checked_out_books.append(current_book)
-                    current_book = {}  # empty current_book to start new book
+        if clean_text:
+            current_book = {}
 
-                current_book["title"] = current_line.split("Title:", 1)[
-                    1].strip()
+            for current_line in clean_text.splitlines():
+                # On this email the label and its value are on the same line,
+                # e.g. "1. Title: The social animal : the hidden sources of love..."
+                # so we split on the label instead of reading the next line
+                if "Title:" in current_line:
+                    if "title" in current_book:
+                        checked_out_books.append(current_book)
+                        current_book = {}  # empty current_book to start new book
 
-            elif "Author:" in current_line:
-                current_book["author"] = current_line.split("Author:", 1)[
-                    1].strip()
+                    current_book["title"] = current_line.split("Title:", 1)[
+                        1].strip()
 
-        if "title" in current_book:
-            # add the last book to the list of checked_out_books
-            checked_out_books.append(current_book)
+                elif "Author:" in current_line:
+                    current_book["author"] = current_line.split("Author:", 1)[
+                        1].strip()
 
-    if checked_out_books:
-        print(
-            f"--- Checkout Receipt Details (Count: {len(checked_out_books)}) ---\n")
-        for book in checked_out_books:
-            print(f"Book:   {book['title']}")
-            print(f"Author: {book.get('author', 'Unknown')}\n")
+            if "title" in current_book:
+                # add the last book to the list of checked_out_books
+                checked_out_books.append(current_book)
 
-            if task_manager == 'todoist':
-                mark_hold_complete_todoist(book_title=book['title'])
-            else:
-                mark_hold_complete_google(book_title=book['title'])
+        if checked_out_books:
+            print(
+                f"--- Checkout Receipt Details (Count: {len(checked_out_books)}) ---\n")
+            for book in checked_out_books:
+                print(f"Book:   {book['title']}")
+                print(f"Author: {book.get('author', 'Unknown')}\n")
 
-        mail.store(latest_receipt_id, '+FLAGS', '\\Seen')
-        print("Checkout receipt email marked as READ")
-    else:
-        print(receipt_msg.get_content())
+                if task_manager == 'todoist':
+                    mark_hold_complete_todoist(book_title=book['title'])
+                else:
+                    mark_hold_complete_google(book_title=book['title'])
+
+            mail.store(current_receipt_id, '+FLAGS', '\\Seen')
+            print("Checkout receipt email marked as READ")
+        else:
+            print(receipt_msg.get_content())
 
 else:
     print("No unread KCLS checkout receipt mails found!")
