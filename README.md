@@ -5,7 +5,7 @@ A headless Python automation script that silently monitors an email inbox for Ki
 It also watches for KCLS "Checkout Receipt" emails: when a receipt comes in, it matches each checked-out book against your pending hold tasks (by title) and marks the matching task complete. Books on the receipt that were never on hold are left alone.
 
 ## Features
-* Uses IMAP to find unread automated library emails.
+* Uses IMAP to find all unread automated library emails matching the relevant subject, not just the latest one.
 * Handles multiple books in a single email and calculates days remaining until the deadline.
 * Maps different library card numbers to specific family members.
 * Auto-completes hold tasks when the corresponding book shows up on a checkout receipt (THIS REQUIRES YOU TO CLICK ON 'EMAIL RECIEPT' WHEN CHECKING BOOKS OUT)
@@ -42,9 +42,8 @@ Get your API token from the Todoist app under Settings -> Integrations -> Develo
 
 ## Miscellaneous
 ### Current Limitations and future plans
-* The code cannot scan several unread emails, just the latest one
 * Due dates aren't supported yet but will be in a future update along with automatic book due task completion using check in emails.
-* An expired hold triggers a known bug which will be fixed. 
+* "Your hold has expired" emails are excluded from the hold search (so they're left unread, not misparsed) but aren't parsed/handled yet - that's still a future update.
 * Code is unoptimized because I am a beginner
 
 

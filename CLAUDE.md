@@ -10,7 +10,7 @@ The owner is learning Python with this project. Favor the codebase's existing pl
 
 Three files:
 
-- [kcls_hold_parser.py](kcls_hold_parser.py) — entrypoint. Connects to Gmail over IMAP, searches the inbox for unread KCLS emails, parses the matching email's HTML body (via BeautifulSoup) into structured "hold" records, and marks the email as read.
+- [kcls_hold_parser.py](kcls_hold_parser.py) — entrypoint. Connects to Gmail over IMAP, searches the inbox for unread KCLS emails, parses each matching email's HTML body (via BeautifulSoup) into structured "hold" records, and marks each email as read once its holds are processed.
 - [kcls_hold_gtasks.py](kcls_hold_gtasks.py) — Google Tasks integration. Handles Google OAuth, resolves the target tasklist by name, and inserts each hold as a task (`add_hold_to_google`).
 - [kcls_hold_todoist.py](kcls_hold_todoist.py) — Todoist integration. Authenticates with a static API token (no OAuth flow), resolves the target project by name, and inserts each hold as a task (`add_hold_to_todoist`).
 
@@ -38,8 +38,8 @@ First run needs a human at a browser: `authenticate_google_tasks()` in `kcls_hol
 
 This matters most for the planned expansion to new email types:
 
-- The IMAP search in `kcls_hold_parser.py` is hardcoded to `FROM "noreply@kcls.org"`, `UNSEEN`, `SUBJECT "Your Hold"` — that subject filter is effectively "the one email type this script currently knows about."
-- Only the single **latest** unread matching email is processed per run, not all unread matches in the mailbox.
+- The IMAP search in `kcls_hold_parser.py` is hardcoded to `FROM "noreply@kcls.org"`, `UNSEEN`, `OR (SUBJECT "hold is available") (SUBJECT "holds are available")` — that subject filter is effectively "the one email type this script currently knows about." IMAP `SUBJECT` search is a substring match, so this phrasing was deliberately chosen to exclude "Your hold has expired..." emails, which also contain "Your Hold" as a substring.
+- All unread matching emails are processed per run (oldest first), not just the latest one — same for the checkout-receipt search further down the file.
 - The body parser is a line-by-line state machine looking for a fixed label set specific to the "hold ready" layout: `Title`, `Account:`, `Author`, `Pickup Location`, `Pickup by`. Other KCLS email types will have different labels/layouts and won't parse correctly through this same scanner as-is.
 - When extending to new email types, the natural approach is a per-type subject search plus a per-type label set/dispatch, rather than trying to generalize the existing scanner in place — the current one is intentionally simple and tied to one layout.
 
