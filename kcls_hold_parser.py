@@ -17,6 +17,22 @@ today = datetime.now().astimezone()
 print(
     f"\n\nStarting on {today}\n({today.strftime("%A, %B %d, %Y at %I:%M %p")})")
 
+# Every label the hold email uses. We need the full list so we can tell a real
+# value apart from the next label in the email
+KNOWN_LABELS = ("Title", "Account:", "Author", "Pickup Location", "Pickup by")
+
+
+def value_after(lines, i):
+    # In the hold email a label's value sits on the line right after it. But if
+    # a book is missing that value (e.g. no author listed), the empty line gets
+    # dropped when we strip the HTML, so lines[i+1] is the NEXT LABEL instead of
+    # the value. Returning "" in that case stops us storing "Pickup by" as an author
+    if i + 1 < len(lines) and lines[i + 1] not in KNOWN_LABELS:
+        return lines[i + 1]
+
+    return ""
+
+
 # In case internet fails
 max_retries = 10
 for attempt in range(max_retries):
@@ -98,6 +114,10 @@ if email_ids:
 
                     current_hold = {}
 
+                    # "Account:" line shows up only once per email, so it is saved alone
+                    account_number = ""
+                    user = "Unknown user"
+
                     # Convert the text into a list of lines so we can loop through them
                     lines = clean_text.splitlines()
 
@@ -111,34 +131,39 @@ if email_ids:
                                 email_holds.append(current_hold)
                                 current_hold = {}  # empty current_book to start new book
 
-                            current_hold["title"] = lines[i+1]
+                            current_hold["title"] = value_after(lines, i)
+
+                            # Stamp this hold with whichever account we last saw above it
+                            current_hold["account_number"] = account_number
+                            current_hold["user"] = user
                             # print(f"Title:    {current_hold['title']}")
 
                         if current_line == "Account:":
-                            account_number = lines[i+1]
-                            current_hold["account_number"] = account_number
+                            account_number = value_after(lines, i)
 
                             # Looks up the account number in users.json, defaults to "Unknown user" if user not found
                             user = user_mapping.get(
                                 account_number, "Unknown user")
-
-                            current_hold["user"] = user
-                            # print(f"Account:  {current_hold['account_number']} ({user})")
+                            # print(f"Account:  {account_number} ({user})")
 
                         elif current_line == "Author":
-                            current_hold["author"] = lines[i+1]
+                            # fall back to "Unknown" like the receipt parser
+                            current_hold["author"] = value_after(
+                                lines, i) or "Unknown"
                             # print(f"Author:   {current_hold['author']}")
 
                         elif current_line == "Pickup Location":
-                            current_hold["location"] = lines[i+1]
+                            current_hold["location"] = value_after(lines, i)
                             # print(f"Location: {current_hold['location']}")
 
                         elif current_line == "Pickup by":
-                            current_hold["deadline"] = dateparser.parse(
-                                lines[i+1], settings={'TIMEZONE': 'US/Pacific', 'RETURN_AS_TIMEZONE_AWARE': True})
+                            deadline_text = value_after(lines, i)
 
-                            current_hold['str_deadline'] = lines[i+1]
-                            # print(f"Deadline: {lines[i+1]} (Pickup in {(current_hold['deadline'] - today).days} days)")
+                            current_hold["deadline"] = dateparser.parse(
+                                deadline_text, settings={'TIMEZONE': 'US/Pacific', 'RETURN_AS_TIMEZONE_AWARE': True})
+
+                            current_hold['str_deadline'] = deadline_text
+                            # print(f"Deadline: {deadline_text} (Pickup in {(current_hold['deadline'] - today).days} days)")
 
                     if "title" in current_hold:
                         # add the last book to the list of email_holds
@@ -206,9 +231,7 @@ if receipt_email_ids:
 
         checked_out_books = []
 
-        # Unlike the hold email, this one isn't always multipart (txt+html) -
-        # it can arrive as a single text/html part, or even a single text/plain
-        # part with no HTML at all, so we handle whichever one shows up
+        # checkout email isnt always multipart
         raw_html = None
         raw_text = None
         if receipt_msg.is_multipart():
@@ -233,9 +256,7 @@ if receipt_email_ids:
             current_book = {}
 
             for current_line in clean_text.splitlines():
-                # On this email the label and its value are on the same line,
-                # e.g. "1. Title: The social animal : the hidden sources of love..."
-                # so we split on the label instead of reading the next line
+                # split on the label instead of reading the next line
                 if "Title:" in current_line:
                     if "title" in current_book:
                         checked_out_books.append(current_book)

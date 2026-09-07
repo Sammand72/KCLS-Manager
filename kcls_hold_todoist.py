@@ -3,6 +3,9 @@
 import os
 from todoist_api_python.api import TodoistAPI
 
+# Every task has this in front of the book title, so it has to be removed before comparing with checkout email
+TASK_TITLE_PREFIX = "KCLS book pickup: "
+
 
 def authenticate_todoist():
     token = os.getenv('TODOIST_API_TOKEN')
@@ -27,13 +30,18 @@ def add_hold_to_todoist(book_title, author, location, account_user, deadline_dat
 
     target_project_id = get_project_id(api, "KCLS Stuff")
 
+    # .date() chops the time part off the datetime
+    pickup_date = None
+    if deadline_datetime is not None:
+        pickup_date = deadline_datetime.date()
+
     # Push the task to the KCLS Stuff project (or Inbox if not found)
     print(f"\nPushing '{book_title}' to Todoist...")
     api.add_task(
-        content=f"KCLS book pickup: {book_title}",
+        content=f"{TASK_TITLE_PREFIX}{book_title}",
         description=f"Author: {author}\nLocation: {location}\nAccount: {account_user}",
         project_id=target_project_id,
-        due_datetime=deadline_datetime
+        due_date=pickup_date
     )
     print("Success!")
 
@@ -50,10 +58,11 @@ def mark_hold_complete_todoist(book_title):
     # get_tasks() returns pages of tasks, so we have to loop through each page
     for task_page in api.get_tasks(project_id=target_project_id):
         for task in task_page:
-            normalized_task_content = task.content.lower().strip()
+            # removeprefix drops "KCLS book pickup: " off the front
+            normalized_task_content = task.content.lower().strip().removeprefix(
+                TASK_TITLE_PREFIX.lower())
 
-            # Bidirectional substring check: the checkout receipt's title may
-            # include a subtitle (after a colon) that the hold task doesn't, or vice versa
+            # Bidirectional substring check: checkout email may contain a subtitle that is cut-off
             if normalized_checkout_title in normalized_task_content or normalized_task_content in normalized_checkout_title:
                 api.complete_task(task.id)
                 print(f"Marked '{task.content}' complete in Todoist\n")

@@ -10,6 +10,9 @@ import json
 # permission we are asking Google for
 SCOPES = ['https://www.googleapis.com/auth/tasks']
 
+# Every task has this in front of the book title, so it has to be removed before comparing with checkout email
+TASK_TITLE_PREFIX = "KCLS book pickup: "
+
 
 def authenticate_google_tasks():
     creds = None
@@ -63,15 +66,16 @@ def add_hold_to_google(book_title, author, location, account_user, deadline_date
     # Connect to Google
     service = authenticate_google_tasks()
 
-    # Google Tasks requires dates to be formatted as an RFC3339 string.
-    formatted_date = deadline_datetime.isoformat()
-
     # Build the data package (the Payload)
     task_payload = {
-        'title': f"KCLS book pickup: {book_title}",
+        'title': f"{TASK_TITLE_PREFIX}{book_title}",
         'notes': f"Author: {author}\nLocation: {location}\nAccount: {account_user}",
-        'due': formatted_date
     }
+
+    # If the email didn't list a pickup date, deadline_datetime is None - prevents crashing on None.isoformat()
+    if deadline_datetime is not None:
+        # Google Tasks requires dates to be formatted as an RFC3339 string.
+        task_payload['due'] = deadline_datetime.isoformat()
 
     target_list_id = get_tasklist_id(service, "KCLS Library Holds")
     print("Chosen Tasklist ID: "+target_list_id)
@@ -98,10 +102,11 @@ def mark_hold_complete_google(book_title):
     normalized_checkout_title = book_title.lower().strip()
 
     for task in tasks:
-        normalized_task_title = task['title'].lower().strip()
+        # removeprefix drops "KCLS book pickup: " off the front
+        normalized_task_title = task['title'].lower().strip().removeprefix(
+            TASK_TITLE_PREFIX.lower())
 
-        # Bidirectional substring check: the checkout receipt's title may
-        # include a subtitle (after a colon) that the hold task doesn't, or vice versa
+        # Bidirectional substring check: checkout email may contain a subtitle that is cut-off
         if normalized_checkout_title in normalized_task_title or normalized_task_title in normalized_checkout_title:
             print(f"\nMarking '{task['title']}' complete in Google Tasks...")
             service.tasks().patch(
@@ -112,4 +117,5 @@ def mark_hold_complete_google(book_title):
             print("Success!")
             return
 
-    print(f"\nNo matching Google Tasks hold found for '{book_title}' (probably wasn't on hold).")
+    print(
+        f"\nNo matching Google Tasks hold found for '{book_title}' (probably wasn't on hold).")
