@@ -5,6 +5,7 @@ from todoist_api_python.api import TodoistAPI
 
 # Every task has this in front of the book title, so it has to be removed before comparing with checkout email
 TASK_TITLE_PREFIX = "KCLS book pickup: "
+DUE_TASK_TITLE_PREFIX = "KCLS book due: "
 
 
 def authenticate_todoist():
@@ -42,6 +43,26 @@ def add_hold_to_todoist(book_title, author, location, account_user, deadline_dat
         description=f"Author: {author}\nLocation: {location}\nAccount: {account_user}",
         project_id=target_project_id,
         due_date=pickup_date
+    )
+    print("Success!")
+
+
+def add_due_book_to_todoist(book_title, author, account_user, due_datetime):
+    # Connect to Todoist
+    api = authenticate_todoist()
+
+    target_project_id = get_project_id(api, "KCLS Stuff")
+
+    due_date = None
+    if due_datetime is not None:
+        due_date = due_datetime.date()
+
+    print(f"\nPushing '{book_title}' due date to Todoist...")
+    api.add_task(
+        content=f"{DUE_TASK_TITLE_PREFIX}{book_title}",
+        description=f"Author: {author}\nAccount: {account_user}",
+        project_id=target_project_id,
+        due_date=due_date
     )
     print("Success!")
 
