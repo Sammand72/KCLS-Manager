@@ -12,6 +12,7 @@ SCOPES = ['https://www.googleapis.com/auth/tasks']
 
 # Every task has this in front of the book title, so it has to be removed before comparing with checkout email
 TASK_TITLE_PREFIX = "KCLS book pickup: "
+DUE_TASK_TITLE_PREFIX = "KCLS book due: "
 
 
 def authenticate_google_tasks():
@@ -83,6 +84,26 @@ def add_hold_to_google(book_title, author, location, account_user, deadline_date
     # Push the package to KCLS Library Holds tasklist
     print(f"\nPushing '{book_title}' to Google Tasks...")
     result = service.tasks().insert(
+        tasklist=target_list_id, body=task_payload).execute()
+    print("Success!")
+
+
+def add_due_book_to_google(book_title, author, account_user, due_datetime):
+    # Connect to Google
+    service = authenticate_google_tasks()
+
+    task_payload = {
+        'title': f"{DUE_TASK_TITLE_PREFIX}{book_title}",
+        'notes': f"Author: {author}\nAccount: {account_user}",
+    }
+
+    if due_datetime is not None:
+        task_payload['due'] = due_datetime.isoformat()
+
+    target_list_id = get_tasklist_id(service, "KCLS Library Holds")
+    print("Chosen Tasklist ID: "+target_list_id)
+    print(f"\nPushing '{book_title}' due date to Google Tasks...")
+    service.tasks().insert(
         tasklist=target_list_id, body=task_payload).execute()
     print("Success!")
 
