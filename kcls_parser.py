@@ -1,17 +1,16 @@
 # Scan KCLS emails and add library holds to Google Tasks or Todoist.
-
+from datetime import datetime
 import email
 import imaplib
 import json
+import sys
 import os
 import re
 import time
 from email import policy
-
 import dateparser
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-
 from kcls_hold_gtasks import (
     add_due_book_to_google,
     add_hold_to_google,
@@ -22,6 +21,10 @@ from kcls_hold_todoist import (
     add_hold_to_todoist,
     mark_hold_complete_todoist,
 )
+
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, script_dir)
 
 
 # These labels help tell an empty value apart from the next label.
@@ -331,11 +334,18 @@ def process_receipt_emails(mail, email_ids, user_mapping, task_manager):
 
 def main():
     """Run the email scanner from start to finish."""
-    load_dotenv()
+    today = datetime.now().astimezone()
+    print(
+        f"\n\nStarting on {today}\n({today.strftime('%A, %B %d, %Y at %I:%M %p')})")
+
+    env_path = os.path.join(script_dir, '.env')
+    json_path = os.path.join(script_dir, 'users.json')
+
+    load_dotenv(dotenv_path=env_path)
     task_manager = os.getenv('TASK_MANAGER', 'google').lower()
     print(f"Selected Task Manager: {task_manager}")
 
-    with open('users.json', 'r') as file:
+    with open(json_path, 'r') as file:
         user_mapping = json.load(file)
 
     mail = connect_to_gmail()

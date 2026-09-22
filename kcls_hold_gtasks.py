@@ -1,4 +1,4 @@
-# Python3 code to take the hold details from kcls_hold_parser.py into Google Tasks API
+# Python3 code to take the hold details from kcls_parser.py into Google Tasks API
 
 import os
 from google.auth.transport.requests import Request
@@ -123,6 +123,10 @@ def mark_hold_complete_google(book_title):
     normalized_checkout_title = book_title.lower().strip()
 
     for task in tasks:
+        if not task['title'].lower().strip().startswith(
+                TASK_TITLE_PREFIX.lower()):
+            continue
+
         # removeprefix drops "KCLS book pickup: " off the front
         normalized_task_title = task['title'].lower().strip().removeprefix(
             TASK_TITLE_PREFIX.lower())
