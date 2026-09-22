@@ -12,7 +12,16 @@ It also watches for KCLS "Checkout Receipt" emails. Each checked-out book gets a
 * Creates due-date tasks for all books on a checkout receipt, including books that were not holds
 * Auto-completes hold tasks when the corresponding book shows up on a checkout receipt (THIS REQUIRES YOU TO CLICK ON 'EMAIL RECIEPT' WHEN CHECKING BOOKS OUT)
 * Matches checkout receipt names to the names in `users.json`
-* Designed to run silently on startup via Windows Task Scheduler/Linux Cron with a log routed.
+* Designed to run on startup via Windows Task Scheduler/Linux Cron with separate library records and operational logs.
+
+## Logs
+
+The script uses Python's built-in `logging` module, so no extra logging package is required.
+
+* `library_records.jsonl` stores one JSON object per hold or checkout. JSON Lines means each line is a complete record that can be searched or processed by another program.
+* `library_tracer.log` stores operational details such as connection attempts, task-manager activity, parsing warnings, and emails marked as read.
+
+Both files are appended to and are created beside the script. Operational messages also appear in the console while the script runs.
 
 ## Dependencies
 

@@ -1,6 +1,7 @@
 # Python3 code to take the hold details from kcls_parser.py into Google Tasks API
 
 import os
+import logging
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -13,6 +14,7 @@ SCOPES = ['https://www.googleapis.com/auth/tasks']
 # Every task has this in front of the book title, so it has to be removed before comparing with checkout email
 TASK_TITLE_PREFIX = "KCLS book pickup: "
 DUE_TASK_TITLE_PREFIX = "KCLS book due: "
+TRACER_LOGGER = logging.getLogger("kcls.tracer")
 
 
 def authenticate_google_tasks():
@@ -58,7 +60,7 @@ def get_tasklist_id(service, target_name):
         if tasklist['title'] == target_name:
             return tasklist['id']  # We found the secret ID!
 
-    print(
+    TRACER_LOGGER.warning(
         f"Warning: Could not find a list named '{target_name}'. Using default.")
     return '@default'
 
@@ -79,13 +81,13 @@ def add_hold_to_google(book_title, author, location, account_user, deadline_date
         task_payload['due'] = deadline_datetime.isoformat()
 
     target_list_id = get_tasklist_id(service, "KCLS Library Holds")
-    print("Chosen Tasklist ID: "+target_list_id)
+    TRACER_LOGGER.info("Chosen Tasklist ID: %s", target_list_id)
 
     # Push the package to KCLS Library Holds tasklist
-    print(f"\nPushing '{book_title}' to Google Tasks...")
+    TRACER_LOGGER.info("Pushing '%s' to Google Tasks", book_title)
     result = service.tasks().insert(
         tasklist=target_list_id, body=task_payload).execute()
-    print("Success!")
+    TRACER_LOGGER.info("Google Tasks hold created successfully")
 
 
 def add_due_book_to_google(book_title, author, account_user, due_datetime):
@@ -101,11 +103,11 @@ def add_due_book_to_google(book_title, author, account_user, due_datetime):
         task_payload['due'] = due_datetime.isoformat()
 
     target_list_id = get_tasklist_id(service, "KCLS Library Holds")
-    print("Chosen Tasklist ID: "+target_list_id)
-    print(f"\nPushing '{book_title}' due date to Google Tasks...")
+    TRACER_LOGGER.info("Chosen Tasklist ID: %s", target_list_id)
+    TRACER_LOGGER.info("Pushing '%s' due date to Google Tasks", book_title)
     service.tasks().insert(
         tasklist=target_list_id, body=task_payload).execute()
-    print("Success!")
+    TRACER_LOGGER.info("Google Tasks due-date task created successfully")
 
 
 def mark_hold_complete_google(book_title):
@@ -133,14 +135,16 @@ def mark_hold_complete_google(book_title):
 
         # Bidirectional substring check: checkout email may contain a subtitle that is cut-off
         if normalized_checkout_title in normalized_task_title or normalized_task_title in normalized_checkout_title:
-            print(f"\nMarking '{task['title']}' complete in Google Tasks...")
+            TRACER_LOGGER.info(
+                "Marking '%s' complete in Google Tasks", task['title'])
             service.tasks().patch(
                 tasklist=target_list_id,
                 task=task['id'],
                 body={'status': 'completed'}
             ).execute()
-            print("Success!")
+            TRACER_LOGGER.info(
+                "Google Tasks hold marked complete successfully")
             return
 
-    print(
+    TRACER_LOGGER.info(
         f"\nNo matching Google Tasks hold found for '{book_title}' (probably wasn't on hold).")

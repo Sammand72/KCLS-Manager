@@ -10,11 +10,11 @@ The owner is learning Python with this project. Favor the codebase's existing pl
 
 Three files:
 
-- [kcls_hold_parser.py](kcls_hold_parser.py) — entrypoint. Connects to Gmail over IMAP, searches the inbox for unread KCLS emails, parses hold HTML and checkout plain-text bodies into structured records, creates tasks, and marks each email as read once it is processed.
+- [kcls_parser.py](kcls_parser.py) — entrypoint. Connects to Gmail over IMAP, searches the inbox for unread KCLS emails, parses hold HTML and checkout plain-text bodies into structured records, creates tasks, and marks each email as read once it is processed.
 - [kcls_hold_gtasks.py](kcls_hold_gtasks.py) — Google Tasks integration. Handles Google OAuth, resolves the target tasklist by name, and inserts each hold as a task (`add_hold_to_google`).
 - [kcls_hold_todoist.py](kcls_hold_todoist.py) — Todoist integration. Authenticates with a static API token (no OAuth flow), resolves the target project by name, and inserts each hold as a task (`add_hold_to_todoist`).
 
-`kcls_hold_parser.py` calls `add_hold_to_google()` or `add_hold_to_todoist()` once per hold it finds, depending on the `TASK_MANAGER` env var — never both. Both functions share the same parameter names (`book_title`, `author`, `location`, `account_user`, `deadline_datetime`) so they're interchangeable at the call site. There's no other entrypoint or module.
+`kcls_parser.py` calls `add_hold_to_google()` or `add_hold_to_todoist()` once per hold it finds, depending on the `TASK_MANAGER` env var — never both. Both functions share the same parameter names (`book_title`, `author`, `location`, `account_user`, `deadline_datetime`) so they're interchangeable at the call site. There's no other entrypoint or module.
 
 For checkout receipts, it calls the corresponding `add_due_book_to_*()` function for every book, using the user's name from the greeting to match the values in `users.json`. It also continues calling `mark_hold_complete_*()` so checked-out holds are completed. Checkout tasks use the `KCLS book due:` prefix.
 
@@ -26,7 +26,8 @@ For checkout receipts, it calls the corresponding `add_due_book_to_*()` function
 | `credentials.json` | Google Cloud OAuth 2.0 client secret (downloaded from Google Cloud Console) |
 | `token.json` | Cached OAuth token, auto-generated on first run by `authenticate_google_tasks()` |
 | `users.json` | Flat map of library account number (string) → first name, used to attribute a hold to a family member |
-| `library_bot_log.txt` | Runtime log output when run headless via cron/Task Scheduler |
+| `library_records.jsonl` | Append-only hold and checkout records, one JSON object per line |
+| `library_tracer.log` | Operational log output from the parser and task managers |
 
 There's no `.env.example` or template for any of these. If one gets added later, keep real secrets out of it.
 
@@ -48,7 +49,7 @@ This matters most for the planned expansion to new email types:
 
 ## Conventions to preserve
 
-- Plain `print()` statements for status/progress — no logging framework.
+- Python's standard `logging` module writes operational messages to `library_tracer.log` and the console, while library events are written to `library_records.jsonl`.
 - Explanatory inline comments aimed at someone learning Python (comments explain *why*/*what a line does*, not just restate the code).
 - Minimal error handling — only the startup IMAP retry loop; no broad try/except elsewhere.
 - snake_case functions and variables; hold data passed around as plain dicts, not classes.
