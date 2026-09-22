@@ -1,4 +1,4 @@
-# Python3 code to take the hold details from kcls_hold_parser.py into Todoist
+# Python3 code to take the hold details from kcls_parser.py into Todoist
 
 import os
 from todoist_api_python.api import TodoistAPI
@@ -79,6 +79,10 @@ def mark_hold_complete_todoist(book_title):
     # get_tasks() returns pages of tasks, so we have to loop through each page
     for task_page in api.get_tasks(project_id=target_project_id):
         for task in task_page:
+            if not task.content.lower().strip().startswith(
+                    TASK_TITLE_PREFIX.lower()):
+                continue
+
             # removeprefix drops "KCLS book pickup: " off the front
             normalized_task_content = task.content.lower().strip().removeprefix(
                 TASK_TITLE_PREFIX.lower())

@@ -1,7 +1,7 @@
 import unittest
 from email.message import EmailMessage
 
-from kcls_hold_parser import parse_checkout_receipt, parse_hold_email
+from kcls_parser import parse_checkout_receipt, parse_hold_email
 
 
 class ParserTests(unittest.TestCase):
