@@ -1,7 +1,17 @@
+import json
+import tempfile
 import unittest
 from email.message import EmailMessage
+from datetime import datetime
 
-from kcls_parser import parse_checkout_receipt, parse_hold_email
+from kcls_parser import (
+    close_logging,
+    configure_logging,
+    get_tracer_logger,
+    parse_checkout_receipt,
+    parse_hold_email,
+    record_library_event,
+)
 
 
 class ParserTests(unittest.TestCase):
@@ -148,6 +158,39 @@ Author:
 
         self.assertEqual(parse_hold_email(message, {}), [])
         self.assertEqual(parse_checkout_receipt(message, {}), [])
+
+    def test_library_records_use_json_lines_and_separate_tracer_output(self):
+        with tempfile.TemporaryDirectory() as log_directory:
+            try:
+                configure_logging(log_directory)
+                get_tracer_logger().info("Operational status")
+                record_library_event(
+                    "hold_ready",
+                    {
+                        "title": "Test Book",
+                        "pickup_by": datetime(2026, 9, 25, 12, 30),
+                    },
+                )
+
+                with open(
+                        f"{log_directory}/library_records.jsonl",
+                        "r",
+                        encoding="utf-8") as records_file:
+                    record = json.loads(records_file.readline())
+
+                with open(
+                        f"{log_directory}/library_tracer.log",
+                        "r",
+                        encoding="utf-8") as tracer_file:
+                    tracer_output = tracer_file.read()
+
+                self.assertEqual(record["event_type"], "hold_ready")
+                self.assertEqual(record["title"], "Test Book")
+                self.assertEqual(record["pickup_by"], "2026-09-25T12:30:00")
+                self.assertIn("Operational status", tracer_output)
+                self.assertNotIn("Operational status", json.dumps(record))
+            finally:
+                close_logging()
 
 
 if __name__ == "__main__":

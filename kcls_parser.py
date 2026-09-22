@@ -3,6 +3,7 @@ from datetime import datetime
 import email
 import imaplib
 import json
+import logging
 import sys
 import os
 import re
@@ -29,6 +30,69 @@ sys.path.insert(0, script_dir)
 
 # These labels help tell an empty value apart from the next label.
 KNOWN_LABELS = ("Title", "Account:", "Author", "Pickup Location", "Pickup by")
+TRACER_LOGGER_NAME = "kcls.tracer"
+RECORD_LOGGER_NAME = "kcls.records"
+
+
+def configure_logging(log_directory):
+    """Send operational messages and library records to separate outputs."""
+    tracer_logger = logging.getLogger(TRACER_LOGGER_NAME)
+    record_logger = logging.getLogger(RECORD_LOGGER_NAME)
+
+    for logger in (tracer_logger, record_logger):
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            handler.close()
+
+    tracer_formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    tracer_file_handler = logging.FileHandler(
+        os.path.join(log_directory, "library_tracer.log"),
+        encoding="utf-8",
+    )
+    tracer_file_handler.setFormatter(tracer_formatter)
+    tracer_logger.addHandler(tracer_file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(tracer_formatter)
+    tracer_logger.addHandler(console_handler)
+
+    record_handler = logging.FileHandler(
+        os.path.join(log_directory, "library_records.jsonl"),
+        encoding="utf-8",
+    )
+    record_handler.setFormatter(logging.Formatter("%(message)s"))
+    record_logger.addHandler(record_handler)
+
+
+def close_logging():
+    """Close the file and console handlers created by configure_logging."""
+    for logger_name in (TRACER_LOGGER_NAME, RECORD_LOGGER_NAME):
+        logger = logging.getLogger(logger_name)
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            handler.close()
+
+
+def record_library_event(event_type, record):
+    """Write one library event as one JSON object in the records file."""
+    event = {
+        "event_type": event_type,
+        "processed_at": datetime.now().astimezone().isoformat(),
+    }
+    event.update(record)
+    logging.getLogger(RECORD_LOGGER_NAME).info(
+        json.dumps(event, default=lambda value: value.isoformat())
+    )
+
+
+def get_tracer_logger():
+    """Return the logger used for operational messages."""
+    return logging.getLogger(TRACER_LOGGER_NAME)
 
 
 def value_after(lines, index):
@@ -187,16 +251,16 @@ def connect_to_gmail(max_retries=10, wait_seconds=15):
     for attempt in range(max_retries):
         try:
             mail = imaplib.IMAP4_SSL('imap.gmail.com')
-            print("Successfully connected to the internet!")
+            get_tracer_logger().info("Successfully connected to the internet!")
             return mail
         except Exception:
-            print(
+            get_tracer_logger().warning(
                 f"Internet not ready yet (Attempt {attempt + 1}/{max_retries}). "
                 f"Waiting {wait_seconds} seconds..."
             )
             time.sleep(wait_seconds)
 
-    print(
+    get_tracer_logger().error(
         f"Could not connect to the internet after {max_retries} attempts. Exiting script.")
     raise SystemExit
 
@@ -272,70 +336,108 @@ def add_due_book_to_task_manager(task_manager, book):
 def process_hold_emails(mail, email_ids, user_mapping, task_manager):
     """Parse and process all unread hold emails."""
     if not email_ids:
-        print("No unread KCLS hold mails found!")
+        get_tracer_logger().info("No unread KCLS hold mails found!")
         return
 
-    print(f"Found {len(email_ids)} unread hold email(s)")
+    get_tracer_logger().info(f"Found {len(email_ids)} unread hold email(s)")
     hold_count = 0
 
     for email_id in email_ids:
         message = fetch_message(mail, email_id)
-        print(f"\n{message['subject']}")
+        get_tracer_logger().info(
+            "Processing hold email: %s", message['subject'])
         holds = parse_hold_email(message, user_mapping)
 
         if not holds:
-            print(message.get_content())
+            get_tracer_logger().warning(
+                "No holds could be parsed from email: %s", message['subject'])
             continue
 
-        print(f"--- Library Hold Details (Count: {len(holds)}) ---\n")
+        get_tracer_logger().info(
+            "Parsed %d library hold(s) from email", len(holds))
         for hold in holds:
             hold_count += 1
-            print(f"Hold {hold_count}")
-            print(f"Account:  {hold['account_number']} ({hold['user']})")
-            print(f"Book:     {hold['title']}")
-            print(f"Author:   {hold['author']}")
-            print(f"Location: {hold['location']}")
-            print(f"Deadline: {hold['str_deadline']}\n")
+            get_tracer_logger().info(
+                "Hold %d: %s by %s for %s at %s, pickup by %s",
+                hold_count,
+                hold['title'],
+                hold['author'],
+                hold['user'],
+                hold['location'],
+                hold['str_deadline'],
+            )
+            record_library_event(
+                "hold_ready",
+                {
+                    "title": hold['title'],
+                    "author": hold['author'],
+                    "account_number": hold['account_number'],
+                    "user": hold['user'],
+                    "pickup_location": hold['location'],
+                    "pickup_by": hold['deadline'],
+                },
+            )
             add_hold_to_task_manager(task_manager, hold)
 
         mail.store(email_id, '+FLAGS', '\\Seen')
-        print("Email marked as READ")
+        get_tracer_logger().info("Hold email marked as read")
 
 
 def process_receipt_emails(mail, email_ids, user_mapping, task_manager):
     """Parse and process all unread checkout receipt emails."""
     if not email_ids:
-        print("No unread KCLS checkout receipt mails found!")
+        get_tracer_logger().info("No unread KCLS checkout receipt mails found!")
         return
 
-    print(f"Found {len(email_ids)} unread checkout receipt email(s)")
+    get_tracer_logger().info(
+        f"Found {len(email_ids)} unread checkout receipt email(s)")
 
     for email_id in email_ids:
         message = fetch_message(mail, email_id)
-        print(f"\n{message['subject']}")
+        get_tracer_logger().info(
+            "Processing checkout receipt: %s", message['subject'])
         checked_out_books = parse_checkout_receipt(message, user_mapping)
 
         if not checked_out_books:
-            print(message.get_content())
+            get_tracer_logger().warning(
+                "No checkout books could be parsed from email: %s",
+                message['subject'],
+            )
             continue
 
-        print(
-            f"--- Checkout Receipt Details (Count: {len(checked_out_books)}) ---\n"
+        get_tracer_logger().info(
+            "Parsed %d checked-out book(s) from receipt",
+            len(checked_out_books),
         )
         for book in checked_out_books:
-            print(f"Book:   {book['title']}")
-            print(f"Author: {book.get('author', 'Unknown')}\n")
+            get_tracer_logger().info(
+                "Checkout: %s by %s for %s, due %s",
+                book['title'],
+                book.get('author', 'Unknown'),
+                book['user'],
+                book['due_date'],
+            )
+            record_library_event(
+                "checkout",
+                {
+                    "title": book['title'],
+                    "author": book.get('author', 'Unknown'),
+                    "user": book['user'],
+                    "due_date": book['due_date'],
+                },
+            )
             add_due_book_to_task_manager(task_manager, book)
             complete_hold_in_task_manager(task_manager, book)
 
         mail.store(email_id, '+FLAGS', '\\Seen')
-        print("Checkout receipt email marked as READ")
+        get_tracer_logger().info("Checkout receipt marked as read")
 
 
 def main():
     """Run the email scanner from start to finish."""
     today = datetime.now().astimezone()
-    print(
+    configure_logging(script_dir)
+    get_tracer_logger().info(
         f"\n\nStarting on {today}\n({today.strftime('%A, %B %d, %Y at %I:%M %p')})")
 
     env_path = os.path.join(script_dir, '.env')
@@ -343,7 +445,7 @@ def main():
 
     load_dotenv(dotenv_path=env_path)
     task_manager = os.getenv('TASK_MANAGER', 'google').lower()
-    print(f"Selected Task Manager: {task_manager}")
+    get_tracer_logger().info(f"Selected Task Manager: {task_manager}")
 
     with open(json_path, 'r') as file:
         user_mapping = json.load(file)
@@ -366,6 +468,7 @@ def main():
         )
     finally:
         mail.logout()
+        close_logging()
 
 
 if __name__ == '__main__':
