@@ -15,11 +15,15 @@ from dotenv import load_dotenv
 from kcls_hold_gtasks import (
     add_due_book_to_google,
     add_hold_to_google,
+    authenticate_google_tasks,
+    get_tasklist_id,
     mark_hold_complete_google,
 )
 from kcls_hold_todoist import (
     add_due_book_to_todoist,
     add_hold_to_todoist,
+    authenticate_todoist,
+    get_project_id,
     mark_hold_complete_todoist,
 )
 
@@ -93,6 +97,26 @@ def record_library_event(event_type, record):
 def get_tracer_logger():
     """Return the logger used for operational messages."""
     return logging.getLogger(TRACER_LOGGER_NAME)
+
+
+def normalize_location_name(location_name):
+    """Normalize library names for matching email text to the location list."""
+    return " ".join(location_name.lower().split())
+
+
+def build_location_address_mapping(location_records):
+    """Build a normalized library-name-to-address mapping."""
+    return {
+        normalize_location_name(record.get("name", "")): record.get(
+            "address", "").strip()
+        for record in location_records
+        if record.get("name", "").strip()
+    }
+
+
+def get_location_address(location_name, location_addresses):
+    """Return a branch address, or an empty string when it is not listed."""
+    return location_addresses.get(normalize_location_name(location_name), "")
 
 
 def value_after(lines, index):
@@ -287,53 +311,94 @@ def search_unread_receipts(mail):
     return messages[0].split()
 
 
-def add_hold_to_task_manager(task_manager, hold):
+def create_task_manager_context(task_manager):
+    """Authenticate once and resolve the destination used by this run."""
+    if task_manager == 'todoist':
+        api = authenticate_todoist()
+        return {
+            'api': api,
+            'target_project_id': get_project_id(api, "KCLS Stuff"),
+        }
+
+    service = authenticate_google_tasks()
+    return {
+        'service': service,
+        'target_list_id': get_tasklist_id(service, "KCLS Library Holds"),
+    }
+
+
+def add_hold_to_task_manager(
+        task_manager, hold, task_context=None, location_address=""):
     """Send one hold to the task manager selected in the environment."""
     if task_manager == 'todoist':
-        add_hold_to_todoist(
-            book_title=hold['title'],
-            author=hold['author'],
-            location=hold['location'],
-            account_user=hold['user'],
-            deadline_datetime=hold['deadline'],
-        )
+        task_arguments = {
+            'book_title': hold['title'],
+            'author': hold['author'],
+            'location': hold['location'],
+            'account_user': hold['user'],
+            'deadline_datetime': hold['deadline'],
+            'address': location_address,
+        }
+        if task_context is not None:
+            task_arguments.update(task_context)
+        add_hold_to_todoist(**task_arguments)
     else:
-        add_hold_to_google(
-            book_title=hold['title'],
-            author=hold['author'],
-            location=hold['location'],
-            account_user=hold['user'],
-            deadline_datetime=hold['deadline'],
-        )
+        task_arguments = {
+            'book_title': hold['title'],
+            'author': hold['author'],
+            'location': hold['location'],
+            'account_user': hold['user'],
+            'deadline_datetime': hold['deadline'],
+            'address': location_address,
+        }
+        if task_context is not None:
+            task_arguments.update(task_context)
+        add_hold_to_google(**task_arguments)
 
 
-def complete_hold_in_task_manager(task_manager, book):
+def complete_hold_in_task_manager(task_manager, book, task_context=None):
     """Mark one checked-out book complete in the selected task manager."""
     if task_manager == 'todoist':
-        mark_hold_complete_todoist(book_title=book['title'])
+        task_arguments = {
+            'book_title': book['title'], 'checkout_user': book['user']}
+        if task_context is not None:
+            task_arguments.update(task_context)
+        mark_hold_complete_todoist(**task_arguments)
     else:
-        mark_hold_complete_google(book_title=book['title'])
+        task_arguments = {
+            'book_title': book['title'], 'checkout_user': book['user']}
+        if task_context is not None:
+            task_arguments.update(task_context)
+        mark_hold_complete_google(**task_arguments)
 
 
-def add_due_book_to_task_manager(task_manager, book):
+def add_due_book_to_task_manager(task_manager, book, task_context=None):
     """Add one checked-out book as a due-date task."""
     if task_manager == 'todoist':
-        add_due_book_to_todoist(
-            book_title=book['title'],
-            author=book['author'],
-            account_user=book['user'],
-            due_datetime=book['due_date'],
-        )
+        task_arguments = {
+            'book_title': book['title'],
+            'author': book['author'],
+            'account_user': book['user'],
+            'due_datetime': book['due_date'],
+        }
+        if task_context is not None:
+            task_arguments.update(task_context)
+        add_due_book_to_todoist(**task_arguments)
     else:
-        add_due_book_to_google(
-            book_title=book['title'],
-            author=book['author'],
-            account_user=book['user'],
-            due_datetime=book['due_date'],
-        )
+        task_arguments = {
+            'book_title': book['title'],
+            'author': book['author'],
+            'account_user': book['user'],
+            'due_datetime': book['due_date'],
+        }
+        if task_context is not None:
+            task_arguments.update(task_context)
+        add_due_book_to_google(**task_arguments)
 
 
-def process_hold_emails(mail, email_ids, user_mapping, task_manager):
+def process_hold_emails(
+        mail, email_ids, user_mapping, task_manager, task_context=None,
+        location_addresses=None):
     """Parse and process all unread hold emails."""
     if not email_ids:
         get_tracer_logger().info("No unread KCLS hold mails found!")
@@ -343,47 +408,63 @@ def process_hold_emails(mail, email_ids, user_mapping, task_manager):
     hold_count = 0
 
     for email_id in email_ids:
-        message = fetch_message(mail, email_id)
-        get_tracer_logger().info(
-            "Processing hold email: %s", message['subject'])
-        holds = parse_hold_email(message, user_mapping)
-
-        if not holds:
-            get_tracer_logger().warning(
-                "No holds could be parsed from email: %s", message['subject'])
-            continue
-
-        get_tracer_logger().info(
-            "Parsed %d library hold(s) from email", len(holds))
-        for hold in holds:
-            hold_count += 1
+        try:
+            message = fetch_message(mail, email_id)
             get_tracer_logger().info(
-                "Hold %d: %s by %s for %s at %s, pickup by %s",
-                hold_count,
-                hold['title'],
-                hold['author'],
-                hold['user'],
-                hold['location'],
-                hold['str_deadline'],
-            )
-            record_library_event(
-                "hold_ready",
-                {
-                    "title": hold['title'],
-                    "author": hold['author'],
-                    "account_number": hold['account_number'],
-                    "user": hold['user'],
-                    "pickup_location": hold['location'],
-                    "pickup_by": hold['deadline'],
-                },
-            )
-            add_hold_to_task_manager(task_manager, hold)
+                "Processing hold email: %s", message['subject'])
+            holds = parse_hold_email(message, user_mapping)
 
-        mail.store(email_id, '+FLAGS', '\\Seen')
-        get_tracer_logger().info("Hold email marked as read")
+            if not holds:
+                get_tracer_logger().warning(
+                    "No holds could be parsed from email: %s",
+                    message['subject'])
+                continue
+
+            get_tracer_logger().info(
+                "Parsed %d library hold(s) from email", len(holds))
+            for hold in holds:
+                if not hold['title'].strip():
+                    get_tracer_logger().warning(
+                        "Skipping hold with an empty title in email: %s",
+                        message['subject'],
+                    )
+                    continue
+
+                hold_count += 1
+                get_tracer_logger().info(
+                    "Hold %d: %s by %s for %s at %s, pickup by %s",
+                    hold_count,
+                    hold['title'],
+                    hold['author'],
+                    hold['user'],
+                    hold['location'],
+                    hold['str_deadline'],
+                )
+                record_library_event(
+                    "hold_ready",
+                    {
+                        "title": hold['title'],
+                        "author": hold['author'],
+                        "account_number": hold['account_number'],
+                        "user": hold['user'],
+                        "pickup_location": hold['location'],
+                        "pickup_by": hold['deadline'],
+                    },
+                )
+                location_address = get_location_address(
+                    hold['location'], location_addresses or {})
+                add_hold_to_task_manager(
+                    task_manager, hold, task_context, location_address)
+
+            mail.store(email_id, '+FLAGS', '\\Seen')
+            get_tracer_logger().info("Hold email marked as read")
+        except Exception:
+            get_tracer_logger().exception(
+                "Failed to process hold email %s", email_id)
 
 
-def process_receipt_emails(mail, email_ids, user_mapping, task_manager):
+def process_receipt_emails(
+        mail, email_ids, user_mapping, task_manager, task_context=None):
     """Parse and process all unread checkout receipt emails."""
     if not email_ids:
         get_tracer_logger().info("No unread KCLS checkout receipt mails found!")
@@ -393,44 +474,57 @@ def process_receipt_emails(mail, email_ids, user_mapping, task_manager):
         f"Found {len(email_ids)} unread checkout receipt email(s)")
 
     for email_id in email_ids:
-        message = fetch_message(mail, email_id)
-        get_tracer_logger().info(
-            "Processing checkout receipt: %s", message['subject'])
-        checked_out_books = parse_checkout_receipt(message, user_mapping)
-
-        if not checked_out_books:
-            get_tracer_logger().warning(
-                "No checkout books could be parsed from email: %s",
-                message['subject'],
-            )
-            continue
-
-        get_tracer_logger().info(
-            "Parsed %d checked-out book(s) from receipt",
-            len(checked_out_books),
-        )
-        for book in checked_out_books:
+        try:
+            message = fetch_message(mail, email_id)
             get_tracer_logger().info(
-                "Checkout: %s by %s for %s, due %s",
-                book['title'],
-                book.get('author', 'Unknown'),
-                book['user'],
-                book['due_date'],
-            )
-            record_library_event(
-                "checkout",
-                {
-                    "title": book['title'],
-                    "author": book.get('author', 'Unknown'),
-                    "user": book['user'],
-                    "due_date": book['due_date'],
-                },
-            )
-            add_due_book_to_task_manager(task_manager, book)
-            complete_hold_in_task_manager(task_manager, book)
+                "Processing checkout receipt: %s", message['subject'])
+            checked_out_books = parse_checkout_receipt(message, user_mapping)
 
-        mail.store(email_id, '+FLAGS', '\\Seen')
-        get_tracer_logger().info("Checkout receipt marked as read")
+            if not checked_out_books:
+                get_tracer_logger().warning(
+                    "No checkout books could be parsed from email: %s",
+                    message['subject'],
+                )
+                continue
+
+            get_tracer_logger().info(
+                "Parsed %d checked-out book(s) from receipt",
+                len(checked_out_books),
+            )
+            for book in checked_out_books:
+                if not book['title'].strip():
+                    get_tracer_logger().warning(
+                        "Skipping checkout with an empty title in email: %s",
+                        message['subject'],
+                    )
+                    continue
+
+                get_tracer_logger().info(
+                    "Checkout: %s by %s for %s, due %s",
+                    book['title'],
+                    book.get('author', 'Unknown'),
+                    book['user'],
+                    book['due_date'],
+                )
+                record_library_event(
+                    "checkout",
+                    {
+                        "title": book['title'],
+                        "author": book.get('author', 'Unknown'),
+                        "user": book['user'],
+                        "due_date": book['due_date'],
+                    },
+                )
+                add_due_book_to_task_manager(
+                    task_manager, book, task_context)
+                complete_hold_in_task_manager(
+                    task_manager, book, task_context)
+
+            mail.store(email_id, '+FLAGS', '\\Seen')
+            get_tracer_logger().info("Checkout receipt marked as read")
+        except Exception:
+            get_tracer_logger().exception(
+                "Failed to process checkout receipt %s", email_id)
 
 
 def main():
@@ -438,10 +532,11 @@ def main():
     today = datetime.now().astimezone()
     configure_logging(script_dir)
     get_tracer_logger().info(
-        f"\n\nStarting on {today}\n({today.strftime('%A, %B %d, %Y at %I:%M %p')})")
+        f"\n\nStarting on {today.strftime('%A, %B %d, %Y at %I:%M %p')}")
 
     env_path = os.path.join(script_dir, '.env')
     json_path = os.path.join(script_dir, 'users.json')
+    locations_path = os.path.join(script_dir, 'library_locations.json')
 
     load_dotenv(dotenv_path=env_path)
     task_manager = os.getenv('TASK_MANAGER', 'google').lower()
@@ -449,22 +544,32 @@ def main():
 
     with open(json_path, 'r') as file:
         user_mapping = json.load(file)
+    with open(locations_path, 'r') as file:
+        location_addresses = build_location_address_mapping(json.load(file))
 
     mail = connect_to_gmail()
     try:
         mail.login(os.getenv('EMAIL_USER'), os.getenv('EMAIL_PASS'))
         mail.select('inbox')
+        hold_email_ids = search_unread_holds(mail)
+        receipt_email_ids = search_unread_receipts(mail)
+        task_context = None
+        if hold_email_ids or receipt_email_ids:
+            task_context = create_task_manager_context(task_manager)
         process_hold_emails(
             mail,
-            search_unread_holds(mail),
+            hold_email_ids,
             user_mapping,
             task_manager,
+            task_context,
+            location_addresses,
         )
         process_receipt_emails(
             mail,
-            search_unread_receipts(mail),
+            receipt_email_ids,
             user_mapping,
             task_manager,
+            task_context,
         )
     finally:
         mail.logout()

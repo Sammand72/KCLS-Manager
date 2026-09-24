@@ -1,16 +1,18 @@
 # KCLS Library Hold Automator
 
-A headless Python automation script that silently monitors an email inbox for King County Library System (KCLS) "Hold is Ready" emails. It parses the email for book titles, authors, pickup locations, and deadlines, and automatically pushes them to a specific Google Tasks list.
+A headless Python automation script that silently monitors an email inbox for King County Library System (KCLS) Hold and Checkout emails. It parses the email for book titles, authors, pickup locations, and deadlines, and automatically pushes them to a Task Manager.
 
-It also watches for KCLS "Checkout Receipt" emails. Each checked-out book gets a `KCLS book due:` task with its author, due date, and library account user. When a receipt comes in, the script also matches each checked-out book against pending hold tasks (by title) and marks matching holds complete.
+> [!NOTE]
+> This script requires you to enable email notifcations. When checking out a book, email receipt has to be enabled for the auto-completion of tasks to work.
 
 ## Features
 
 * Uses IMAP to find all unread automated library emails matching the relevant subject, not just the latest one.
 * Handles multiple books in a single email and calculates days remaining until the deadline.
 * Maps different library card numbers to specific family members.
+* Adds the pickup library's street address to hold-task notes and descriptions.
 * Creates due-date tasks for all books on a checkout receipt, including books that were not holds
-* Auto-completes hold tasks when the corresponding book shows up on a checkout receipt (THIS REQUIRES YOU TO CLICK ON 'EMAIL RECIEPT' WHEN CHECKING BOOKS OUT)
+* Auto-completes hold tasks when the corresponding book shows up on a checkout receipt
 * Matches checkout receipt names to the names in `users.json`
 * Designed to run on startup via Windows Task Scheduler/Linux Cron with separate library records and operational logs.
 
@@ -22,6 +24,8 @@ The script uses Python's built-in `logging` module, so no extra logging package 
 * `library_tracer.log` stores operational details such as connection attempts, task-manager activity, parsing warnings, and emails marked as read.
 
 Both files are appended to and are created beside the script. Operational messages also appear in the console while the script runs.
+
+Hold completion normalizes titles by lowercasing, removing punctuation (including angle brackets), and collapsing whitespace. The hold title must be contained in the checkout title, which handles KCLS hold emails that cut off subtitles without allowing short titles. Empty titles are skipped. When the checkout user is known, the task's stored account user must match as well.
 
 ## Dependencies
 
@@ -53,7 +57,10 @@ Note: On linux instead of pip you may use apt to install the underlying librarie
   * **TASK_MANAGER**- set to `google` or `todoist` to choose which task manager holds get pushed to (defaults to `google` if unset)
   * **TODOIST_API_TOKEN**- your Todoist personal API token (only needed if TASK_MANAGER=todoist)
 * (**token.json** is created automatically)
-Add all 4 of these to the .gitignore
+* **library_locations.json**- contains the library branch names and addresses used for hold tasks. Each entry has a `name` and an `address` field.
+Add the credential and personal-data files to the `.gitignore`; keep the shared library location list available to the parser.
+
+The branch name from the hold email remains in the task's `Location:` line. When a matching address is found, it is added as a separate `Address:` line in Google Tasks notes and Todoist descriptions. Branch names are matched case-insensitively with extra whitespace ignored. If a branch is not listed, the task is still created with its original library name and no address line.
 
 ## Task managers
 
@@ -72,7 +79,8 @@ Get your API token from the Todoist app under Settings -> Integrations -> Develo
 ### Current Limitations and future plans
 
 * Checkout due dates are read when the receipt is processed, but the tasks are not updated yet when KCLS renews a loan.
-* "Your hold has expired" emails are excluded from the hold search (so they're left unread, not misparsed) but aren't parsed/handled yet - that's still a future update.
+* "Your hold has expired" emails are not parsed yet
+* Direct calendar support will be added sometime.
 * The email parser is organized into small functions, but it still processes one email at a time and uses the existing task-manager APIs.
 
 Code partly made with Google Gemini 3.1 Pro and Claude Code

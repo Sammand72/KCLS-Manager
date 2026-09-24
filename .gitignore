@@ -4,7 +4,9 @@ token.json
 users.json
 
 # Ignore log files and environment variables
-library_bot_log.txt
+library_records.jsonl
+library_tracer.log
+library_crash.log
 .env
 
 # Ignore Python cache files (Python creates these automatically)
