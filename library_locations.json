@@ -1,0 +1,198 @@
+[
+  {
+    "name": "Administrative Office - Service Center",
+    "address": "960 Newport Way NW, Issaquah, WA 98027"
+  },
+  {
+    "name": "Algona-Pacific",
+    "address": "255 Ellingson Road, Pacific, WA 98047"
+  },
+  {
+    "name": "Auburn",
+    "address": "1102 Auburn Way S, Auburn, WA 98002"
+  },
+  {
+    "name": "Bellevue",
+    "address": "1111 110th Avenue NE, Bellevue, WA 98004"
+  },
+  {
+    "name": "Black Diamond",
+    "address": "24707 Roberts Drive, Black Diamond, WA 98010"
+  },
+  {
+    "name": "Bothell",
+    "address": "18215 98th Avenue NE, Bothell, WA 98011"
+  },
+  {
+    "name": "Boulevard Park",
+    "address": "12015 Roseberg Avenue S, Seattle, WA 98168"
+  },
+  {
+    "name": "Burien",
+    "address": "400 SW 152nd Street, Burien, WA 98166"
+  },
+  {
+    "name": "Carnation",
+    "address": "4804 Tolt Avenue, Carnation, WA 98014"
+  },
+  {
+    "name": "Covington",
+    "address": "27100 164th Avenue SE, Covington, WA 98042"
+  },
+  {
+    "name": "Crossroads",
+    "address": "15600 NE 8th Street, Suite K-11, Bellevue, WA 98008"
+  },
+  {
+    "name": "Des Moines",
+    "address": "21620 11th Avenue S, Des Moines, WA 98198"
+  },
+  {
+    "name": "Duvall",
+    "address": "15508 Main Street NE, Duvall, WA 98019"
+  },
+  {
+    "name": "Enumclaw",
+    "address": "1700 1st Street, Enumclaw, WA 98022"
+  },
+  {
+    "name": "Fairwood",
+    "address": "17009 140th Avenue SE, Renton, WA 98058"
+  },
+  {
+    "name": "Fall City",
+    "address": "33415 SE 42nd Place, Fall City, WA 98024"
+  },
+  {
+    "name": "Federal Way",
+    "address": "34200 1st Way S, Federal Way, WA 98003"
+  },
+  {
+    "name": "Federal Way 320th",
+    "address": "848 S 320th Street, Federal Way, WA 98003"
+  },
+  {
+    "name": "Greenbridge",
+    "address": "9720 8th Avenue SW, Seattle, WA 98106"
+  },
+  {
+    "name": "Issaquah",
+    "address": "10 W Sunset Way, Issaquah, WA 98027"
+  },
+  {
+    "name": "Kenmore",
+    "address": "6531 NE 181st Street, Kenmore, WA 98028"
+  },
+  {
+    "name": "Kent",
+    "address": "212 2nd Avenue N, Kent, WA 98032"
+  },
+  {
+    "name": "Kent Panther Lake",
+    "address": "20500 108th Avenue SE, Kent, WA 98031"
+  },
+  {
+    "name": "Kingsgate",
+    "address": "12315 NE 143rd Street, Kirkland, WA 98034"
+  },
+  {
+    "name": "Kirkland",
+    "address": "308 Kirkland Avenue, Kirkland, WA 98033"
+  },
+  {
+    "name": "Lake Forest Park",
+    "address": "17171 Bothell Way NE, Lake Forest Park, WA 98155"
+  },
+  {
+    "name": "Lake Hills",
+    "address": "15590 Lake Hills Boulevard, Bellevue, WA 98007"
+  },
+  {
+    "name": "Maple Valley",
+    "address": "21844 SE 248th Street, Maple Valley, WA 98038"
+  },
+  {
+    "name": "Mercer Island",
+    "address": "4400 88th Avenue SE, Mercer Island, WA 98040"
+  },
+  {
+    "name": "Muckleshoot",
+    "address": "39917 Auburn Enumclaw Rd SE, Auburn, WA 98092"
+  },
+  {
+    "name": "Newcastle",
+    "address": "12901 Newcastle Way, Newcastle, WA 98056"
+  },
+  {
+    "name": "Newport Way",
+    "address": "14250 SE Newport Way, Bellevue, WA 98006"
+  },
+  {
+    "name": "North Bend",
+    "address": "115 E 4th St, North Bend, WA 98045"
+  },
+  {
+    "name": "Redmond",
+    "address": "15990 NE 85th Street, Redmond, WA 98052"
+  },
+  {
+    "name": "Renton",
+    "address": "100 Mill Avenue S, Renton, WA 98057"
+  },
+  {
+    "name": "Renton Highlands",
+    "address": "2801 NE 10th Street, Renton, WA 98056"
+  },
+  {
+    "name": "Richmond Beach",
+    "address": "19601 21st Avenue NW, Shoreline, WA 98177"
+  },
+  {
+    "name": "Sammamish",
+    "address": "825 228th Avenue SE, Sammamish, WA 98075"
+  },
+  {
+    "name": "Shoreline",
+    "address": "345 NE 175th Street, Shoreline, WA 98155"
+  },
+  {
+    "name": "Skykomish",
+    "address": "100 5th Street N, Skykomish, WA 98288"
+  },
+  {
+    "name": "Skyway",
+    "address": "12601 76th Avenue S, Seattle, WA 98178"
+  },
+  {
+    "name": "Snoqualmie",
+    "address": "7824 Center Boulevard SE, Snoqualmie, WA 98065"
+  },
+  {
+    "name": "Southcenter Connection",
+    "address": "1386 Southcenter Mall, Tukwila, WA 98188"
+  },
+  {
+    "name": "Tukwila",
+    "address": "14380 Tukwila International Blvd, Tukwila, WA 98168"
+  },
+  {
+    "name": "Valley View",
+    "address": "17850 Military Road S, SeaTac, WA 98188"
+  },
+  {
+    "name": "Vashon",
+    "address": "17210 Vashon Hwy SW, Vashon Island, WA 98070"
+  },
+  {
+    "name": "White Center",
+    "address": "1409 SW 107th Street, Seattle, WA 98146"
+  },
+  {
+    "name": "Woodinville",
+    "address": "17105 Avondale Road NE, Woodinville, WA 98072"
+  },
+  {
+    "name": "Woodmont",
+    "address": "26809 Pacific Highway S, Des Moines, WA 98198"
+  }
+]

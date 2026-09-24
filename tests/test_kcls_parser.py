@@ -5,9 +5,11 @@ from email.message import EmailMessage
 from datetime import datetime
 
 from kcls_parser import (
+    build_location_address_mapping,
     close_logging,
     configure_logging,
     get_tracer_logger,
+    get_location_address,
     parse_checkout_receipt,
     parse_hold_email,
     record_library_event,
@@ -158,6 +160,23 @@ Author:
 
         self.assertEqual(parse_hold_email(message, {}), [])
         self.assertEqual(parse_checkout_receipt(message, {}), [])
+
+    def test_location_addresses_match_case_and_whitespace(self):
+        addresses = build_location_address_mapping([
+            {"name": "  Auburn  ", "address": "1102 Auburn Way S"},
+        ])
+
+        self.assertEqual(
+            get_location_address("AUBURN", addresses),
+            "1102 Auburn Way S",
+        )
+
+    def test_unknown_location_has_no_address(self):
+        addresses = build_location_address_mapping([
+            {"name": "Auburn", "address": "1102 Auburn Way S"},
+        ])
+
+        self.assertEqual(get_location_address("Not Listed", addresses), "")
 
     def test_library_records_use_json_lines_and_separate_tracer_output(self):
         with tempfile.TemporaryDirectory() as log_directory:

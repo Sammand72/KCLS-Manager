@@ -7,6 +7,10 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 import json
+from kcls_task_matching import titles_match, users_match
+
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # permission we are asking Google for
 SCOPES = ['https://www.googleapis.com/auth/tasks']
@@ -19,9 +23,12 @@ TRACER_LOGGER = logging.getLogger("kcls.tracer")
 
 def authenticate_google_tasks():
     creds = None
+    token_path = os.path.join(script_dir, 'token.json')
+    credentials_path = os.path.join(script_dir, 'credentials.json')
+
     # check if we already logged in (saved in token.json)
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
 
     # if no valid credentials, let user log in
     if not creds or not creds.valid:
@@ -30,7 +37,7 @@ def authenticate_google_tasks():
         else:
             # opens browser to click "Allow"
             flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
+                credentials_path, SCOPES)
             creds = flow.run_local_server(port=0)
 
         creds_data = {
@@ -43,7 +50,7 @@ def authenticate_google_tasks():
         }
 
         # Save the manually built dictionary to the file
-        with open('token.json', 'w') as token:
+        with open(token_path, 'w') as token:
             json.dump(creds_data, token)
 
     # build and return API
@@ -65,14 +72,20 @@ def get_tasklist_id(service, target_name):
     return '@default'
 
 
-def add_hold_to_google(book_title, author, location, account_user, deadline_datetime):
-    # Connect to Google
-    service = authenticate_google_tasks()
+def add_hold_to_google(
+    book_title, author, location, account_user, deadline_datetime,
+        service=None, target_list_id=None, address=""):
+    if service is None:
+        service = authenticate_google_tasks()
 
     # Build the data package (the Payload)
+    notes = f"Author: {author}\nLocation: {location}"
+    if address:
+        notes += f"\nAddress: {address}"
+    notes += f"\nAccount: {account_user}"
     task_payload = {
         'title': f"{TASK_TITLE_PREFIX}{book_title}",
-        'notes': f"Author: {author}\nLocation: {location}\nAccount: {account_user}",
+        'notes': notes,
     }
 
     # If the email didn't list a pickup date, deadline_datetime is None - prevents crashing on None.isoformat()
@@ -80,7 +93,8 @@ def add_hold_to_google(book_title, author, location, account_user, deadline_date
         # Google Tasks requires dates to be formatted as an RFC3339 string.
         task_payload['due'] = deadline_datetime.isoformat()
 
-    target_list_id = get_tasklist_id(service, "KCLS Library Holds")
+    if target_list_id is None:
+        target_list_id = get_tasklist_id(service, "KCLS Library Holds")
     TRACER_LOGGER.info("Chosen Tasklist ID: %s", target_list_id)
 
     # Push the package to KCLS Library Holds tasklist
@@ -90,9 +104,11 @@ def add_hold_to_google(book_title, author, location, account_user, deadline_date
     TRACER_LOGGER.info("Google Tasks hold created successfully")
 
 
-def add_due_book_to_google(book_title, author, account_user, due_datetime):
-    # Connect to Google
-    service = authenticate_google_tasks()
+def add_due_book_to_google(
+        book_title, author, account_user, due_datetime, service=None,
+        target_list_id=None):
+    if service is None:
+        service = authenticate_google_tasks()
 
     task_payload = {
         'title': f"{DUE_TASK_TITLE_PREFIX}{book_title}",
@@ -102,7 +118,8 @@ def add_due_book_to_google(book_title, author, account_user, due_datetime):
     if due_datetime is not None:
         task_payload['due'] = due_datetime.isoformat()
 
-    target_list_id = get_tasklist_id(service, "KCLS Library Holds")
+    if target_list_id is None:
+        target_list_id = get_tasklist_id(service, "KCLS Library Holds")
     TRACER_LOGGER.info("Chosen Tasklist ID: %s", target_list_id)
     TRACER_LOGGER.info("Pushing '%s' due date to Google Tasks", book_title)
     service.tasks().insert(
@@ -110,19 +127,19 @@ def add_due_book_to_google(book_title, author, account_user, due_datetime):
     TRACER_LOGGER.info("Google Tasks due-date task created successfully")
 
 
-def mark_hold_complete_google(book_title):
-    # Connect to Google
-    service = authenticate_google_tasks()
+def mark_hold_complete_google(
+        book_title, checkout_user="Unknown user", service=None,
+        target_list_id=None):
+    if service is None:
+        service = authenticate_google_tasks()
 
-    target_list_id = get_tasklist_id(service, "KCLS Library Holds")
+    if target_list_id is None:
+        target_list_id = get_tasklist_id(service, "KCLS Library Holds")
 
     # showCompleted=False so we only ever match against still-pending pickups
     results = service.tasks().list(
         tasklist=target_list_id, showCompleted=False).execute()
     tasks = results.get('items', [])
-
-    # Lowercase + strip so small formatting differences don't break the match
-    normalized_checkout_title = book_title.lower().strip()
 
     for task in tasks:
         if not task['title'].lower().strip().startswith(
@@ -130,11 +147,11 @@ def mark_hold_complete_google(book_title):
             continue
 
         # removeprefix drops "KCLS book pickup: " off the front
-        normalized_task_title = task['title'].lower().strip().removeprefix(
+        task_title = task['title'].lower().strip().removeprefix(
             TASK_TITLE_PREFIX.lower())
 
-        # Bidirectional substring check: checkout email may contain a subtitle that is cut-off
-        if normalized_checkout_title in normalized_task_title or normalized_task_title in normalized_checkout_title:
+        if titles_match(book_title, task_title) and users_match(
+                checkout_user, task.get('notes', '')):
             TRACER_LOGGER.info(
                 "Marking '%s' complete in Google Tasks", task['title'])
             service.tasks().patch(

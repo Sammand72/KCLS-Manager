@@ -3,6 +3,7 @@
 import os
 import logging
 from todoist_api_python.api import TodoistAPI
+from kcls_task_matching import titles_match, users_match
 
 # Every task has this in front of the book title, so it has to be removed before comparing with checkout email
 TASK_TITLE_PREFIX = "KCLS book pickup: "
@@ -27,33 +28,44 @@ def get_project_id(api, target_name):
     return None
 
 
-def add_hold_to_todoist(book_title, author, location, account_user, deadline_datetime):
-    # Connect to Todoist
-    api = authenticate_todoist()
+def add_hold_to_todoist(
+    book_title, author, location, account_user, deadline_datetime,
+        api=None, target_project_id=None, address=""):
+    if api is None:
+        api = authenticate_todoist()
 
-    target_project_id = get_project_id(api, "KCLS Stuff")
+    if target_project_id is None:
+        target_project_id = get_project_id(api, "KCLS Stuff")
 
     # .date() chops the time part off the datetime
     pickup_date = None
     if deadline_datetime is not None:
         pickup_date = deadline_datetime.date()
 
+    description = f"Author: {author}\nLocation: {location}"
+    if address:
+        description += f"\nAddress: {address}"
+    description += f"\nAccount: {account_user}"
+
     # Push the task to the KCLS Stuff project (or Inbox if not found)
     TRACER_LOGGER.info("Pushing '%s' to Todoist", book_title)
     api.add_task(
         content=f"{TASK_TITLE_PREFIX}{book_title}",
-        description=f"Author: {author}\nLocation: {location}\nAccount: {account_user}",
+        description=description,
         project_id=target_project_id,
         due_date=pickup_date
     )
     TRACER_LOGGER.info("Todoist hold created successfully")
 
 
-def add_due_book_to_todoist(book_title, author, account_user, due_datetime):
-    # Connect to Todoist
-    api = authenticate_todoist()
+def add_due_book_to_todoist(
+        book_title, author, account_user, due_datetime, api=None,
+        target_project_id=None):
+    if api is None:
+        api = authenticate_todoist()
 
-    target_project_id = get_project_id(api, "KCLS Stuff")
+    if target_project_id is None:
+        target_project_id = get_project_id(api, "KCLS Stuff")
 
     due_date = None
     if due_datetime is not None:
@@ -69,14 +81,14 @@ def add_due_book_to_todoist(book_title, author, account_user, due_datetime):
     TRACER_LOGGER.info("Todoist due-date task created successfully")
 
 
-def mark_hold_complete_todoist(book_title):
-    # Connect to Todoist
-    api = authenticate_todoist()
+def mark_hold_complete_todoist(
+        book_title, checkout_user="Unknown user", api=None,
+        target_project_id=None):
+    if api is None:
+        api = authenticate_todoist()
 
-    target_project_id = get_project_id(api, "KCLS Stuff")
-
-    # Lowercase + strip so small formatting differences don't break the match
-    normalized_checkout_title = book_title.lower().strip()
+    if target_project_id is None:
+        target_project_id = get_project_id(api, "KCLS Stuff")
 
     # get_tasks() returns pages of tasks, so we have to loop through each page
     for task_page in api.get_tasks(project_id=target_project_id):
@@ -86,11 +98,11 @@ def mark_hold_complete_todoist(book_title):
                 continue
 
             # removeprefix drops "KCLS book pickup: " off the front
-            normalized_task_content = task.content.lower().strip().removeprefix(
+            task_title = task.content.lower().strip().removeprefix(
                 TASK_TITLE_PREFIX.lower())
 
-            # Bidirectional substring check: checkout email may contain a subtitle that is cut-off
-            if normalized_checkout_title in normalized_task_content or normalized_task_content in normalized_checkout_title:
+            if titles_match(book_title, task_title) and users_match(
+                    checkout_user, getattr(task, 'description', '')):
                 api.complete_task(task.id)
                 TRACER_LOGGER.info(
                     "Marked '%s' complete in Todoist", task.content)
