@@ -12,24 +12,25 @@ from email import policy
 import dateparser
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from kcls_hold_gtasks import (
+from kcls_tasker_gtasks import (
     add_due_book_to_google,
     add_hold_to_google,
     authenticate_google_tasks,
     get_tasklist_id,
+    get_tasklist_name,
     mark_hold_complete_google,
 )
-from kcls_hold_todoist import (
+from kcls_tasker_todoist import (
     add_due_book_to_todoist,
     add_hold_to_todoist,
     authenticate_todoist,
     get_project_id,
+    get_project_name,
     mark_hold_complete_todoist,
 )
 
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, script_dir)
 
 
 # These labels help tell an empty value apart from the next label.
@@ -61,9 +62,10 @@ def configure_logging(log_directory):
     tracer_file_handler.setFormatter(tracer_formatter)
     tracer_logger.addHandler(tracer_file_handler)
 
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(tracer_formatter)
-    tracer_logger.addHandler(console_handler)
+    if sys.stdout.isatty():
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(tracer_formatter)
+        tracer_logger.addHandler(console_handler)
 
     record_handler = logging.FileHandler(
         os.path.join(log_directory, "library_records.jsonl"),
@@ -156,8 +158,16 @@ def get_message_text(message):
 
 
 def fetch_message(mail, email_id):
-    """Fetch complete email from Gmail and turn it into a message object."""
+    """Fetch complete email from IMAP Gmail and turn it into a message object."""
     status, data = mail.fetch(email_id, '(RFC822)')
+    if status != 'OK':
+        get_tracer_logger().error(
+            "Could not fetch email %s from IMAP Gmail (status: %s)",
+            email_id,
+            status,
+        )
+        return None
+
     raw_email_bytes = data[0][1]
     return email.message_from_bytes(raw_email_bytes, policy=policy.default)
 
@@ -275,17 +285,17 @@ def connect_to_gmail(max_retries=10, wait_seconds=15):
     for attempt in range(max_retries):
         try:
             mail = imaplib.IMAP4_SSL('imap.gmail.com')
-            get_tracer_logger().info("Successfully connected to the internet!")
+            get_tracer_logger().info("Connected to the mail server.")
             return mail
         except Exception:
             get_tracer_logger().warning(
-                f"Internet not ready yet (Attempt {attempt + 1}/{max_retries}). "
+                f"Mail server not ready yet (Attempt {attempt + 1}/{max_retries}). "
                 f"Waiting {wait_seconds} seconds..."
             )
             time.sleep(wait_seconds)
 
     get_tracer_logger().error(
-        f"Could not connect to the internet after {max_retries} attempts. Exiting script.")
+        f"Could not connect to mail server after {max_retries} attempts. Exiting script.")
     raise SystemExit
 
 
@@ -297,6 +307,13 @@ def search_unread_holds(mail):
         'UNSEEN',
         '(OR (SUBJECT "Hold is Ready") (SUBJECT "Holds are Ready"))',
     )
+    if status != 'OK' or not messages:
+        get_tracer_logger().error(
+            "Could not search for unread hold emails in IMAP Gmail (status: %s)",
+            status,
+        )
+        return []
+
     return messages[0].split()
 
 
@@ -308,28 +325,48 @@ def search_unread_receipts(mail):
         'UNSEEN',
         '(SUBJECT "Checkout Receipt")',
     )
+    if status != 'OK' or not messages:
+        get_tracer_logger().error(
+            "Could not search for unread checkout receipts in IMAP Gmail "
+            "(status: %s)",
+            status,
+        )
+        return []
+
     return messages[0].split()
+
+
+def validate_task_manager(task_manager):
+    """Reject task-manager names that this script does not support."""
+    if task_manager not in ('todoist', 'google'):
+        get_tracer_logger().error(
+            "Invalid task manager specified in .env: %s", task_manager)
+        raise ValueError(f"Invalid task manager: {task_manager}")
 
 
 def create_task_manager_context(task_manager):
     """Authenticate once and resolve the destination used by this run."""
+    validate_task_manager(task_manager)
+
     if task_manager == 'todoist':
         api = authenticate_todoist()
         return {
             'api': api,
-            'target_project_id': get_project_id(api, "KCLS Stuff"),
+            'target_project_id': get_project_id(api, get_project_name()),
         }
 
     service = authenticate_google_tasks()
     return {
         'service': service,
-        'target_list_id': get_tasklist_id(service, "KCLS Library Holds"),
+        'target_list_id': get_tasklist_id(service, get_tasklist_name()),
     }
 
 
 def add_hold_to_task_manager(
         task_manager, hold, task_context=None, location_address=""):
     """Send one hold to the task manager selected in the environment."""
+    validate_task_manager(task_manager)
+
     if task_manager == 'todoist':
         task_arguments = {
             'book_title': hold['title'],
@@ -358,6 +395,8 @@ def add_hold_to_task_manager(
 
 def complete_hold_in_task_manager(task_manager, book, task_context=None):
     """Mark one checked-out book complete in the selected task manager."""
+    validate_task_manager(task_manager)
+
     if task_manager == 'todoist':
         task_arguments = {
             'book_title': book['title'], 'checkout_user': book['user']}
@@ -374,6 +413,8 @@ def complete_hold_in_task_manager(task_manager, book, task_context=None):
 
 def add_due_book_to_task_manager(task_manager, book, task_context=None):
     """Add one checked-out book as a due-date task."""
+    validate_task_manager(task_manager)
+
     if task_manager == 'todoist':
         task_arguments = {
             'book_title': book['title'],
@@ -410,14 +451,20 @@ def process_hold_emails(
     for email_id in email_ids:
         try:
             message = fetch_message(mail, email_id)
+            if message is None:
+                continue
+
             get_tracer_logger().info(
                 "Processing hold email: %s", message['subject'])
             holds = parse_hold_email(message, user_mapping)
 
             if not holds:
-                get_tracer_logger().warning(
-                    "No holds could be parsed from email: %s",
-                    message['subject'])
+                get_tracer_logger().error(
+                    "No holds could be parsed from email: %s; marking it "
+                    "as read to prevent repeated retries",
+                    message['subject'],
+                )
+                mail.store(email_id, '+FLAGS', '\\Seen')
                 continue
 
             get_tracer_logger().info(
@@ -476,15 +523,20 @@ def process_receipt_emails(
     for email_id in email_ids:
         try:
             message = fetch_message(mail, email_id)
+            if message is None:
+                continue
+
             get_tracer_logger().info(
                 "Processing checkout receipt: %s", message['subject'])
             checked_out_books = parse_checkout_receipt(message, user_mapping)
 
             if not checked_out_books:
-                get_tracer_logger().warning(
-                    "No checkout books could be parsed from email: %s",
+                get_tracer_logger().error(
+                    "No checkout books could be parsed from email: %s; "
+                    "marking it as read to prevent repeated retries",
                     message['subject'],
                 )
+                mail.store(email_id, '+FLAGS', '\\Seen')
                 continue
 
             get_tracer_logger().info(
@@ -539,8 +591,9 @@ def main():
     locations_path = os.path.join(script_dir, 'library_locations.json')
 
     load_dotenv(dotenv_path=env_path)
-    task_manager = os.getenv('TASK_MANAGER', 'google').lower()
+    task_manager = os.getenv('TASK_MANAGER', 'google').strip().lower()
     get_tracer_logger().info(f"Selected Task Manager: {task_manager}")
+    validate_task_manager(task_manager)
 
     with open(json_path, 'r') as file:
         user_mapping = json.load(file)

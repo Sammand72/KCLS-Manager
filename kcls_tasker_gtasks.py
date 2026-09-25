@@ -21,7 +21,13 @@ DUE_TASK_TITLE_PREFIX = "KCLS book due: "
 TRACER_LOGGER = logging.getLogger("kcls.tracer")
 
 
+def get_tasklist_name():
+    """Get the Google Tasks tasklist name from the environment."""
+    return os.getenv('GOOGLE_TASKLIST_NAME', '').strip()
+
+
 def authenticate_google_tasks():
+    """Load saved Google credentials or complete the OAuth login flow."""
     creds = None
     token_path = os.path.join(script_dir, 'token.json')
     credentials_path = os.path.join(script_dir, 'credentials.json')
@@ -58,6 +64,10 @@ def authenticate_google_tasks():
 
 
 def get_tasklist_id(service, target_name):
+    """Find a Google Tasks list by name, or use Google's default list."""
+    if not target_name:
+        return '@default'
+
     # asking Google for all tasklists
     results = service.tasklists().list().execute()
     tasklists = results.get('items', [])
@@ -75,6 +85,7 @@ def get_tasklist_id(service, target_name):
 def add_hold_to_google(
     book_title, author, location, account_user, deadline_datetime,
         service=None, target_list_id=None, address=""):
+    """Create a Google Tasks pickup task for a library hold."""
     if service is None:
         service = authenticate_google_tasks()
 
@@ -94,7 +105,7 @@ def add_hold_to_google(
         task_payload['due'] = deadline_datetime.isoformat()
 
     if target_list_id is None:
-        target_list_id = get_tasklist_id(service, "KCLS Library Holds")
+        target_list_id = get_tasklist_id(service, get_tasklist_name())
     TRACER_LOGGER.info("Chosen Tasklist ID: %s", target_list_id)
 
     # Push the package to KCLS Library Holds tasklist
@@ -107,6 +118,7 @@ def add_hold_to_google(
 def add_due_book_to_google(
         book_title, author, account_user, due_datetime, service=None,
         target_list_id=None):
+    """Create a Google Tasks task for a book's checkout due date."""
     if service is None:
         service = authenticate_google_tasks()
 
@@ -119,7 +131,7 @@ def add_due_book_to_google(
         task_payload['due'] = due_datetime.isoformat()
 
     if target_list_id is None:
-        target_list_id = get_tasklist_id(service, "KCLS Library Holds")
+        target_list_id = get_tasklist_id(service, get_tasklist_name())
     TRACER_LOGGER.info("Chosen Tasklist ID: %s", target_list_id)
     TRACER_LOGGER.info("Pushing '%s' due date to Google Tasks", book_title)
     service.tasks().insert(
@@ -130,38 +142,53 @@ def add_due_book_to_google(
 def mark_hold_complete_google(
         book_title, checkout_user="Unknown user", service=None,
         target_list_id=None):
+    """Find a matching open pickup task and mark it complete."""
     if service is None:
         service = authenticate_google_tasks()
 
     if target_list_id is None:
-        target_list_id = get_tasklist_id(service, "KCLS Library Holds")
+        target_list_id = get_tasklist_id(service, get_tasklist_name())
 
-    # showCompleted=False so we only ever match against still-pending pickups
-    results = service.tasks().list(
-        tasklist=target_list_id, showCompleted=False).execute()
-    tasks = results.get('items', [])
+    # showCompleted=False so we only ever match against still-pending pickups.
+    # Google returns at most 100 tasks per page, so follow every page.
+    page_token = None
+    while True:
+        list_request_args = {
+            'tasklist': target_list_id,
+            'showCompleted': False,
+            'maxResults': 100,
+        }
+        if page_token:
+            list_request_args['pageToken'] = page_token
 
-    for task in tasks:
-        if not task['title'].lower().strip().startswith(
-                TASK_TITLE_PREFIX.lower()):
-            continue
+        results = service.tasks().list(**list_request_args).execute()
+        tasks = results.get('items', [])
 
-        # removeprefix drops "KCLS book pickup: " off the front
-        task_title = task['title'].lower().strip().removeprefix(
-            TASK_TITLE_PREFIX.lower())
+        for task in tasks:
+            if not task['title'].lower().strip().startswith(
+                    TASK_TITLE_PREFIX.lower()):
+                continue
 
-        if titles_match(book_title, task_title) and users_match(
-                checkout_user, task.get('notes', '')):
-            TRACER_LOGGER.info(
-                "Marking '%s' complete in Google Tasks", task['title'])
-            service.tasks().patch(
-                tasklist=target_list_id,
-                task=task['id'],
-                body={'status': 'completed'}
-            ).execute()
-            TRACER_LOGGER.info(
-                "Google Tasks hold marked complete successfully")
-            return
+            # removeprefix drops "KCLS book pickup: " off the front
+            task_title = task['title'].lower().strip().removeprefix(
+                TASK_TITLE_PREFIX.lower())
+
+            if titles_match(book_title, task_title) and users_match(
+                    checkout_user, task.get('notes', '')):
+                TRACER_LOGGER.info(
+                    "Marking '%s' complete in Google Tasks", task['title'])
+                service.tasks().patch(
+                    tasklist=target_list_id,
+                    task=task['id'],
+                    body={'status': 'completed'}
+                ).execute()
+                TRACER_LOGGER.info(
+                    "Google Tasks hold marked complete successfully")
+                return
+
+        page_token = results.get('nextPageToken')
+        if not page_token:
+            break
 
     TRACER_LOGGER.info(
         f"\nNo matching Google Tasks hold found for '{book_title}' (probably wasn't on hold).")

@@ -37,11 +37,17 @@ def users_match(checkout_user, task_text):
 
 
 def titles_match(checkout_title, hold_title):
-    """Match a shorter hold title contained in the full checkout title."""
+    """Match an exact title or a sufficiently long truncated hold title."""
     normalized_checkout_title = normalize_title(checkout_title)
     normalized_hold_title = normalize_title(hold_title)
 
     if not normalized_checkout_title or not normalized_hold_title:
         return False
 
-    return normalized_hold_title in normalized_checkout_title
+    if normalized_checkout_title == normalized_hold_title:
+        return True
+
+    return (
+        len(normalized_hold_title) >= 10
+        and normalized_checkout_title.startswith(normalized_hold_title)
+    )

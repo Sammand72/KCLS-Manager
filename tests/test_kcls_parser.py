@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from email.message import EmailMessage
 from datetime import datetime
+from types import SimpleNamespace
 
 from kcls_parser import (
     build_location_address_mapping,
@@ -13,6 +14,9 @@ from kcls_parser import (
     parse_checkout_receipt,
     parse_hold_email,
     record_library_event,
+    search_unread_holds,
+    search_unread_receipts,
+    validate_task_manager,
 )
 
 
@@ -121,7 +125,7 @@ Author: Second Author
 
     def test_parse_checkout_user_and_due_date(self):
         message = self.make_message(
-            """Dear SAMARTH,
+            """Dear JOHN,
 
 You checked out the following items:
 
@@ -133,11 +137,11 @@ You checked out the following items:
 """
         )
 
-        books = parse_checkout_receipt(message, {"123": "Samarth"})
+        books = parse_checkout_receipt(message, {"123": "John"})
 
         self.assertEqual(books[0]["title"], "Diary of a wimpy kid Partypooper")
         self.assertEqual(books[0]["author"], "Kinney, Jeff")
-        self.assertEqual(books[0]["user"], "Samarth")
+        self.assertEqual(books[0]["user"], "John")
         self.assertEqual(books[0]["due_date"].strftime(
             "%Y-%m-%d"), "2026-10-06")
 
@@ -149,7 +153,7 @@ Author:
 """
         )
 
-        books = parse_checkout_receipt(message, {"123": "Samarth"})
+        books = parse_checkout_receipt(message, {"123": "John"})
 
         self.assertEqual(books[0]["user"], "Unknown user")
         self.assertEqual(books[0]["author"], "Unknown")
@@ -177,6 +181,23 @@ Author:
         ])
 
         self.assertEqual(get_location_address("Not Listed", addresses), "")
+
+    def test_imap_fetch_failure_returns_no_message(self):
+        mail = SimpleNamespace(fetch=lambda *args: ("NO", []))
+
+        from kcls_parser import fetch_message
+
+        self.assertIsNone(fetch_message(mail, b"1"))
+
+    def test_imap_search_failure_returns_no_email_ids(self):
+        mail = SimpleNamespace(search=lambda *args: ("NO", [b"1 2"]))
+
+        self.assertEqual(search_unread_holds(mail), [])
+        self.assertEqual(search_unread_receipts(mail), [])
+
+    def test_invalid_task_manager_is_rejected(self):
+        with self.assertRaises(ValueError):
+            validate_task_manager("unsupported")
 
     def test_library_records_use_json_lines_and_separate_tracer_output(self):
         with tempfile.TemporaryDirectory() as log_directory:

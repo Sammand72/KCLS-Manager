@@ -11,12 +11,22 @@ DUE_TASK_TITLE_PREFIX = "KCLS book due: "
 TRACER_LOGGER = logging.getLogger("kcls.tracer")
 
 
+def get_project_name():
+    """Get the Todoist project name from the environment."""
+    return os.getenv('TODOIST_PROJECT_NAME', '').strip()
+
+
 def authenticate_todoist():
+    """Create a Todoist API client using the token from the environment."""
     token = os.getenv('TODOIST_API_TOKEN')
     return TodoistAPI(token)
 
 
 def get_project_id(api, target_name):
+    """Find a Todoist project by name, or use Todoist's Inbox."""
+    if not target_name:
+        return None
+
     # get_projects() returns pages of projects, so we have to loop through each page
     for project_page in api.get_projects():
         for project in project_page:
@@ -31,11 +41,12 @@ def get_project_id(api, target_name):
 def add_hold_to_todoist(
     book_title, author, location, account_user, deadline_datetime,
         api=None, target_project_id=None, address=""):
+    """Create a Todoist task for a library hold."""
     if api is None:
         api = authenticate_todoist()
 
     if target_project_id is None:
-        target_project_id = get_project_id(api, "KCLS Stuff")
+        target_project_id = get_project_id(api, get_project_name())
 
     # .date() chops the time part off the datetime
     pickup_date = None
@@ -47,7 +58,7 @@ def add_hold_to_todoist(
         description += f"\nAddress: {address}"
     description += f"\nAccount: {account_user}"
 
-    # Push the task to the KCLS Stuff project (or Inbox if not found)
+    # Push the task to the selected project, or Todoist's Inbox if no project was selected.
     TRACER_LOGGER.info("Pushing '%s' to Todoist", book_title)
     api.add_task(
         content=f"{TASK_TITLE_PREFIX}{book_title}",
@@ -61,11 +72,12 @@ def add_hold_to_todoist(
 def add_due_book_to_todoist(
         book_title, author, account_user, due_datetime, api=None,
         target_project_id=None):
+    """Create a Todoist task for a book's checkout due date."""
     if api is None:
         api = authenticate_todoist()
 
     if target_project_id is None:
-        target_project_id = get_project_id(api, "KCLS Stuff")
+        target_project_id = get_project_id(api, get_project_name())
 
     due_date = None
     if due_datetime is not None:
@@ -84,11 +96,12 @@ def add_due_book_to_todoist(
 def mark_hold_complete_todoist(
         book_title, checkout_user="Unknown user", api=None,
         target_project_id=None):
+    """Find a matching open pickup task and mark it complete."""
     if api is None:
         api = authenticate_todoist()
 
     if target_project_id is None:
-        target_project_id = get_project_id(api, "KCLS Stuff")
+        target_project_id = get_project_id(api, get_project_name())
 
     # get_tasks() returns pages of tasks, so we have to loop through each page
     for task_page in api.get_tasks(project_id=target_project_id):
@@ -97,7 +110,7 @@ def mark_hold_complete_todoist(
                     TASK_TITLE_PREFIX.lower()):
                 continue
 
-            # removeprefix drops "KCLS book pickup: " off the front
+            # Remove the pickup prefix before comparing titles.
             task_title = task.content.lower().strip().removeprefix(
                 TASK_TITLE_PREFIX.lower())
 
