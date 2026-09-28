@@ -118,7 +118,7 @@ class TaskMatchingBackendTests(unittest.TestCase):
         service = FakeGoogleService([])
 
         with patch.dict(os.environ, {"GOOGLE_TASKLIST_NAME": "Reading List"}), \
-                patch("kcls_hold_gtasks.get_tasklist_id", return_value="list") as get_list:
+                patch("kcls_tasker_gtasks.get_tasklist_id", return_value="list") as get_list:
             add_hold_to_google(
                 "A Book", "An Author", "Auburn", "Sam", None,
                 service=service,
@@ -133,7 +133,7 @@ class TaskMatchingBackendTests(unittest.TestCase):
         )
 
         with patch.dict(os.environ, {"TODOIST_PROJECT_NAME": "Reading List"}), \
-                patch("kcls_hold_todoist.get_project_id", return_value="project") as get_project:
+                patch("kcls_tasker_todoist.get_project_id", return_value="project") as get_project:
             add_hold_to_todoist(
                 "A Book", "An Author", "Auburn", "Sam", None,
                 api=api,
@@ -189,8 +189,8 @@ class TaskMatchingBackendTests(unittest.TestCase):
         ]
         service = FakeGoogleService(tasks)
 
-        with patch("kcls_hold_gtasks.authenticate_google_tasks", return_value=service), \
-                patch("kcls_hold_gtasks.get_tasklist_id", return_value="list"):
+        with patch("kcls_tasker_gtasks.authenticate_google_tasks", return_value=service), \
+                patch("kcls_tasker_gtasks.get_tasklist_id", return_value="list"):
             mark_hold_complete_google("Little Women", "Sam")
 
         self.assertEqual(service.task_api.completed, ["right-user"])
@@ -210,8 +210,8 @@ class TaskMatchingBackendTests(unittest.TestCase):
             },
         ])
 
-        with patch("kcls_hold_gtasks.authenticate_google_tasks", return_value=service), \
-                patch("kcls_hold_gtasks.get_tasklist_id", return_value="list"):
+        with patch("kcls_tasker_gtasks.authenticate_google_tasks", return_value=service), \
+                patch("kcls_tasker_gtasks.get_tasklist_id", return_value="list"):
             mark_hold_complete_google("Little Women", "Sam")
 
         self.assertEqual(service.task_api.completed, ["page-two-hold"])
@@ -237,8 +237,8 @@ class TaskMatchingBackendTests(unittest.TestCase):
         }]
         service = FakeGoogleService(tasks)
 
-        with patch("kcls_hold_gtasks.authenticate_google_tasks", return_value=service), \
-                patch("kcls_hold_gtasks.get_tasklist_id", return_value="list"):
+        with patch("kcls_tasker_gtasks.authenticate_google_tasks", return_value=service), \
+                patch("kcls_tasker_gtasks.get_tasklist_id", return_value="list"):
             mark_hold_complete_google("It", "Sam")
             mark_hold_complete_google("", "Sam")
 
@@ -252,8 +252,8 @@ class TaskMatchingBackendTests(unittest.TestCase):
         }]
         service = FakeGoogleService(tasks)
 
-        with patch("kcls_hold_gtasks.authenticate_google_tasks", return_value=service), \
-                patch("kcls_hold_gtasks.get_tasklist_id", return_value="list"):
+        with patch("kcls_tasker_gtasks.authenticate_google_tasks", return_value=service), \
+                patch("kcls_tasker_gtasks.get_tasklist_id", return_value="list"):
             mark_hold_complete_google("Little Women", "Sam")
 
         self.assertEqual(service.task_api.completed, [])
@@ -277,8 +277,8 @@ class TaskMatchingBackendTests(unittest.TestCase):
         )
         completed = []
 
-        with patch("kcls_hold_todoist.authenticate_todoist", return_value=api), \
-                patch("kcls_hold_todoist.get_project_id", return_value="project"):
+        with patch("kcls_tasker_todoist.authenticate_todoist", return_value=api), \
+                patch("kcls_tasker_todoist.get_project_id", return_value="project"):
             mark_hold_complete_todoist("Little Women", "Sam")
 
         self.assertEqual(completed, ["right-user"])

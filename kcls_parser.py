@@ -116,6 +116,21 @@ def build_location_address_mapping(location_records):
     }
 
 
+def load_location_addresses(file_path):
+    """Load library addresses, continuing without them if the file is invalid."""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            return build_location_address_mapping(json.load(file))
+    except (OSError, ValueError, TypeError, AttributeError, KeyError) as error:
+        get_tracer_logger().warning(
+            "Could not load library locations from %s: %s. "
+            "Continuing without addresses.",
+            file_path,
+            error,
+        )
+        return {}
+
+
 def get_location_address(location_name, location_addresses):
     """Return a branch address, or an empty string when it is not listed."""
     return location_addresses.get(normalize_location_name(location_name), "")
@@ -210,7 +225,7 @@ def parse_hold_email(message, user_mapping):
             current_hold["deadline"] = dateparser.parse(
                 deadline_text,
                 settings={
-                    'TIMEZONE': 'US/Pacific',
+                    'TIMEZONE': 'America/Los_Angeles',
                     'RETURN_AS_TIMEZONE_AWARE': True,
                 },
             )
@@ -597,8 +612,7 @@ def main():
 
     with open(json_path, 'r') as file:
         user_mapping = json.load(file)
-    with open(locations_path, 'r') as file:
-        location_addresses = build_location_address_mapping(json.load(file))
+    location_addresses = load_location_addresses(locations_path)
 
     mail = connect_to_gmail()
     try:

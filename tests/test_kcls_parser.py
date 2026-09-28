@@ -11,6 +11,7 @@ from kcls_parser import (
     configure_logging,
     get_tracer_logger,
     get_location_address,
+    load_location_addresses,
     parse_checkout_receipt,
     parse_hold_email,
     record_library_event,
@@ -181,6 +182,21 @@ Author:
         ])
 
         self.assertEqual(get_location_address("Not Listed", addresses), "")
+
+    def test_missing_location_file_returns_empty_mapping(self):
+        addresses = load_location_addresses("does-not-exist.json")
+
+        self.assertEqual(addresses, {})
+
+    def test_malformed_location_file_returns_empty_mapping(self):
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", encoding="utf-8") as file:
+            file.write("not valid json")
+            file.flush()
+
+            addresses = load_location_addresses(file.name)
+
+        self.assertEqual(addresses, {})
 
     def test_imap_fetch_failure_returns_no_message(self):
         mail = SimpleNamespace(fetch=lambda *args: ("NO", []))
