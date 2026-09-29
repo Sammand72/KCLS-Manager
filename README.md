@@ -1,4 +1,4 @@
-# KCLS Library Hold Automator
+# KCLS Library Manager
 
 A headless Python automation script that silently monitors an email inbox for King County Library System (KCLS) Hold and Checkout emails. It parses the email for book titles, authors, pickup locations, and deadlines, and automatically pushes them to a Task Manager.
 
@@ -128,7 +128,6 @@ crontab -l
 ### Current Limitations and future plans
 
 * Checkout due dates are read when the receipt is processed, but the tasks are not updated yet when KCLS renews a loan.
-* "Your hold has expired" emails are not parsed yet
 * Direct calendar events arent supported yet.
 * Current IMAP connection is limited to Gmail, with the only current supported auth being the app password.
 * Limited to 2 task managers, with no simultaneous tasks

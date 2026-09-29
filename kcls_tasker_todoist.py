@@ -7,6 +7,7 @@ from kcls_task_matching import titles_match, users_match
 
 # Every task has this in front of the book title, so it has to be removed before comparing with checkout email
 TASK_TITLE_PREFIX = "KCLS book pickup: "
+EXPIRED_TASK_TITLE_PREFIX = "EXPIRED KCLS book pickup: "
 DUE_TASK_TITLE_PREFIX = "KCLS book due: "
 TRACER_LOGGER = logging.getLogger("kcls.tracer")
 
@@ -67,6 +68,36 @@ def add_hold_to_todoist(
         due_date=pickup_date
     )
     TRACER_LOGGER.info("Todoist hold created successfully")
+
+
+def expire_hold_todoist(
+        book_title, account_user, api=None, target_project_id=None):
+    """Rename the matching normal pickup task instead of creating a task."""
+    if api is None:
+        api = authenticate_todoist()
+
+    if target_project_id is None:
+        target_project_id = get_project_id(api, get_project_name())
+
+    for task_page in api.get_tasks(project_id=target_project_id):
+        for task in task_page:
+            if not task.content.lower().strip().startswith(
+                    TASK_TITLE_PREFIX.lower()):
+                continue
+
+            task_title = task.content.lower().strip().removeprefix(
+                TASK_TITLE_PREFIX.lower())
+            if titles_match(book_title, task_title) and users_match(
+                    account_user, getattr(task, 'description', '')):
+                expired_title = (
+                    f"{EXPIRED_TASK_TITLE_PREFIX}"
+                    f"{task.content.strip()[len(TASK_TITLE_PREFIX):]}"
+                )
+                api.update_task(task.id, content=expired_title)
+                TRACER_LOGGER.info(
+                    "Renamed '%s' to '%s' in Todoist", task.content,
+                    expired_title)
+                return
 
 
 def add_due_book_to_todoist(

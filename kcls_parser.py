@@ -16,6 +16,7 @@ from kcls_tasker_gtasks import (
     add_due_book_to_google,
     add_hold_to_google,
     authenticate_google_tasks,
+    expire_hold_google,
     get_tasklist_id,
     get_tasklist_name,
     mark_hold_complete_google,
@@ -24,6 +25,7 @@ from kcls_tasker_todoist import (
     add_due_book_to_todoist,
     add_hold_to_todoist,
     authenticate_todoist,
+    expire_hold_todoist,
     get_project_id,
     get_project_name,
     mark_hold_complete_todoist,
@@ -357,12 +359,13 @@ def login_to_gmail(mail, username, password, max_attempts=3, wait_seconds=15):
 
 
 def search_unread_holds(mail):
-    """Find unread KCLS emails saying that a hold is ready."""
+    """Find unread KCLS emails about ready or expired holds."""
     status, messages = mail.search(
         None,
         '(FROM "noreply@kcls.org")',
         'UNSEEN',
-        '(OR (SUBJECT "Hold is Ready") (SUBJECT "Holds are Ready"))',
+        '(OR (OR (SUBJECT "Hold is Ready") (SUBJECT "Holds are Ready")) '
+        '(OR (SUBJECT "Hold Has Expired") (SUBJECT "Holds have expired")))',
     )
     if status != 'OK' or not messages:
         get_tracer_logger().error(
@@ -423,6 +426,19 @@ def add_hold_to_task_manager(
         task_manager, hold, task_context=None, location_address=""):
     """Send one hold to the task manager selected in the environment."""
     validate_task_manager(task_manager)
+
+    if hold.get('expired', False):
+        expire_arguments = {
+            'book_title': hold['title'],
+            'account_user': hold['user'],
+        }
+        if task_context is not None:
+            expire_arguments.update(task_context)
+        if task_manager == 'todoist':
+            expire_hold_todoist(**expire_arguments)
+        else:
+            expire_hold_google(**expire_arguments)
+        return
 
     if task_manager == 'todoist':
         task_arguments = {
@@ -513,6 +529,7 @@ def process_hold_emails(
 
             get_tracer_logger().info(
                 "Processing hold email: %s", message['subject'])
+            is_expired = "expired" in (message['subject'] or '').lower()
             holds = parse_hold_email(message, user_mapping)
 
             if not holds:
@@ -545,7 +562,7 @@ def process_hold_emails(
                     hold['str_deadline'],
                 )
                 record_library_event(
-                    "hold_ready",
+                    "hold_expired" if is_expired else "hold_ready",
                     {
                         "title": hold['title'],
                         "author": hold['author'],
@@ -555,6 +572,7 @@ def process_hold_emails(
                         "pickup_by": hold['deadline'],
                     },
                 )
+                hold['expired'] = is_expired
                 location_address = get_location_address(
                     hold['location'], location_addresses or {})
                 add_hold_to_task_manager(

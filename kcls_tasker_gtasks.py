@@ -17,6 +17,7 @@ SCOPES = ['https://www.googleapis.com/auth/tasks']
 
 # Every task has this in front of the book title, so it has to be removed before comparing with checkout email
 TASK_TITLE_PREFIX = "KCLS book pickup: "
+EXPIRED_TASK_TITLE_PREFIX = "EXPIRED KCLS book pickup: "
 DUE_TASK_TITLE_PREFIX = "KCLS book due: "
 TRACER_LOGGER = logging.getLogger("kcls.tracer")
 
@@ -113,6 +114,54 @@ def add_hold_to_google(
     result = service.tasks().insert(
         tasklist=target_list_id, body=task_payload).execute()
     TRACER_LOGGER.info("Google Tasks hold created successfully")
+
+
+def expire_hold_google(
+        book_title, account_user, service=None, target_list_id=None):
+    """Rename the matching normal pickup task instead of creating a task."""
+    if service is None:
+        service = authenticate_google_tasks()
+
+    if target_list_id is None:
+        target_list_id = get_tasklist_id(service, get_tasklist_name())
+
+    page_token = None
+    while True:
+        list_request_args = {
+            'tasklist': target_list_id,
+            'showCompleted': False,
+            'maxResults': 100,
+        }
+        if page_token:
+            list_request_args['pageToken'] = page_token
+
+        results = service.tasks().list(**list_request_args).execute()
+        for task in results.get('items', []):
+            if not task['title'].lower().strip().startswith(
+                    TASK_TITLE_PREFIX.lower()):
+                continue
+
+            task_title = task['title'].lower().strip().removeprefix(
+                TASK_TITLE_PREFIX.lower())
+            if titles_match(book_title, task_title) and users_match(
+                    account_user, task.get('notes', '')):
+                expired_title = (
+                    f"{EXPIRED_TASK_TITLE_PREFIX}"
+                    f"{task['title'].strip()[len(TASK_TITLE_PREFIX):]}"
+                )
+                service.tasks().patch(
+                    tasklist=target_list_id,
+                    task=task['id'],
+                    body={'title': expired_title},
+                ).execute()
+                TRACER_LOGGER.info(
+                    "Renamed '%s' to '%s' in Google Tasks",
+                    task['title'], expired_title)
+                return
+
+        page_token = results.get('nextPageToken')
+        if not page_token:
+            break
 
 
 def add_due_book_to_google(

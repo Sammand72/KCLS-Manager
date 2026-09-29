@@ -213,6 +213,18 @@ Author:
         self.assertEqual(search_unread_holds(mail), [])
         self.assertEqual(search_unread_receipts(mail), [])
 
+    def test_hold_search_includes_ready_and_expired_subjects(self):
+        searches = []
+        mail = SimpleNamespace(
+            search=lambda *args: (searches.append(args) or ("OK", [b"1 2"])))
+
+        self.assertEqual(search_unread_holds(mail), [b"1", b"2"])
+        search_text = " ".join(str(argument) for argument in searches[0])
+        self.assertIn('SUBJECT "Hold is Ready"', search_text)
+        self.assertIn('SUBJECT "Holds are Ready"', search_text)
+        self.assertIn('SUBJECT "Hold Has Expired"', search_text)
+        self.assertIn('SUBJECT "Holds have expired"', search_text)
+
     def test_imap_login_succeeds_on_first_attempt(self):
         from kcls_parser import login_to_gmail
 

@@ -6,12 +6,14 @@ from unittest.mock import patch
 
 from kcls_tasker_gtasks import (
     add_hold_to_google,
+    expire_hold_google,
     get_tasklist_id,
     get_tasklist_name,
     mark_hold_complete_google,
 )
 from kcls_tasker_todoist import (
     add_hold_to_todoist,
+    expire_hold_todoist,
     get_project_id,
     get_project_name,
     mark_hold_complete_todoist,
@@ -65,7 +67,7 @@ class MatcherTests(unittest.TestCase):
         self.assertTrue(users_match("sam", "Account: Sam"))
         self.assertFalse(users_match("Sam", "Account: Alex"))
         self.assertFalse(users_match("Sam", "Author: Someone"))
-        self.assertTrue(users_match("Unknown user", "Account: Alex"))
+        self.assertFalse(users_match("Unknown user", "Account: Alex"))
 
 
 class FakeGoogleTasks:
@@ -75,6 +77,7 @@ class FakeGoogleTasks:
         self.page_index = 0
         self.list_calls = []
         self.completed = []
+        self.updated = []
 
     def list(self, **kwargs):
         self.list_calls.append(kwargs)
@@ -88,7 +91,10 @@ class FakeGoogleTasks:
         return {"items": self.pending_tasks}
 
     def patch(self, **kwargs):
-        self.completed.append(kwargs["task"])
+        if kwargs["body"].get("status") == "completed":
+            self.completed.append(kwargs["task"])
+        else:
+            self.updated.append(kwargs)
         return SimpleNamespace(execute=lambda: {})
 
     def insert(self, **kwargs):
@@ -156,6 +162,21 @@ class TaskMatchingBackendTests(unittest.TestCase):
         self.assertIn("Address: 1102 Auburn Way S, Auburn, WA 98002", notes)
         self.assertIn("Account: Sam", notes)
 
+    def test_google_expired_hold_renames_matching_account_task(self):
+        service = FakeGoogleService([{
+            "id": "sam-hold",
+            "title": "KCLS book pickup: A Book",
+            "notes": "Account: Sam",
+        }])
+
+        expire_hold_google(
+            "A Book", "Sam", service=service, target_list_id="list")
+
+        self.assertEqual(
+            service.task_api.updated[0]["body"]["title"],
+            "EXPIRED KCLS book pickup: A Book",
+        )
+
     def test_todoist_hold_includes_library_address_in_description(self):
         added_tasks = []
         api = SimpleNamespace(
@@ -173,6 +194,45 @@ class TaskMatchingBackendTests(unittest.TestCase):
         self.assertIn(
             "Address: 1102 Auburn Way S, Auburn, WA 98002", description)
         self.assertIn("Account: Sam", description)
+
+    def test_todoist_expired_hold_renames_matching_account_task(self):
+        updated_tasks = []
+        task = SimpleNamespace(
+            id="sam-hold",
+            content="KCLS book pickup: A Book",
+            description="Account: Sam",
+        )
+        api = SimpleNamespace(
+            get_tasks=lambda project_id: [[task]],
+            update_task=lambda *args, **kwargs: updated_tasks.append(
+                (args, kwargs)),
+        )
+
+        expire_hold_todoist(
+            "A Book", "Sam", api=api, target_project_id="project")
+
+        self.assertEqual(
+            updated_tasks[0][1]["content"],
+            "EXPIRED KCLS book pickup: A Book",
+        )
+
+    def test_expired_hold_does_not_rename_another_account_task(self):
+        task = SimpleNamespace(
+            id="alex-hold",
+            content="KCLS book pickup: A Book",
+            description="Account: Alex",
+        )
+        updated_tasks = []
+        api = SimpleNamespace(
+            get_tasks=lambda project_id: [[task]],
+            update_task=lambda *args, **kwargs: updated_tasks.append(
+                (args, kwargs)),
+        )
+
+        expire_hold_todoist(
+            "A Book", "Sam", api=api, target_project_id="project")
+
+        self.assertEqual(updated_tasks, [])
 
     def test_google_completion_uses_title_and_user_matching(self):
         tasks = [
@@ -258,6 +318,20 @@ class TaskMatchingBackendTests(unittest.TestCase):
 
         self.assertEqual(service.task_api.completed, [])
 
+    def test_google_completion_ignores_expired_hold_tasks(self):
+        tasks = [{
+            "id": "expired-hold",
+            "title": "EXPIRED KCLS book pickup: Little Women",
+            "notes": "Account: Sam",
+        }]
+        service = FakeGoogleService(tasks)
+
+        with patch("kcls_tasker_gtasks.authenticate_google_tasks", return_value=service), \
+                patch("kcls_tasker_gtasks.get_tasklist_id", return_value="list"):
+            mark_hold_complete_google("Little Women", "Sam")
+
+        self.assertEqual(service.task_api.completed, [])
+
     def test_todoist_completion_uses_title_and_user_matching(self):
         tasks = [
             SimpleNamespace(
@@ -283,11 +357,38 @@ class TaskMatchingBackendTests(unittest.TestCase):
 
         self.assertEqual(completed, ["right-user"])
 
-    def make_message(self, body):
+    def make_message(self, body, subject="Test KCLS email"):
         message = EmailMessage()
-        message["Subject"] = "Test KCLS email"
+        message["Subject"] = subject
         message.set_content(body)
         return message
+
+    def test_expired_hold_is_created_for_the_correct_account(self):
+        message = self.make_message(
+            "Account:\n123\nTitle\nA Book\nAuthor\nAn Author\n"
+            "Pickup Location\nLibrary\n",
+            subject="Your Hold Has Expired at King County Library System",
+        )
+        mail = SimpleNamespace(store=lambda *args: None)
+
+        with patch("kcls_parser.fetch_message", return_value=message), \
+                patch("kcls_parser.record_library_event") as record_event, \
+                patch("kcls_parser.add_hold_to_task_manager") as add_hold:
+            process_hold_emails(mail, [b"1"], {"123": "Sam"}, "google")
+
+        add_hold.assert_called_once()
+        self.assertTrue(add_hold.call_args.args[1]["expired"])
+        record_event.assert_called_once_with(
+            "hold_expired",
+            {
+                "title": "A Book",
+                "author": "An Author",
+                "account_number": "123",
+                "user": "Sam",
+                "pickup_location": "Library",
+                "pickup_by": None,
+            },
+        )
 
     def test_blank_checkout_title_has_no_task_side_effects(self):
         message = self.make_message("Title: \nAuthor: Unknown\n")

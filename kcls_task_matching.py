@@ -25,10 +25,10 @@ def extract_task_user(task_text):
 
 
 def users_match(checkout_user, task_text):
-    """Require equal known users, while allowing an unknown checkout user."""
+    """Require a known checkout user to match the task's account user."""
     normalized_checkout_user = normalize_user(checkout_user)
     if not normalized_checkout_user or normalized_checkout_user == UNKNOWN_USER:
-        return True
+        return False
 
     normalized_task_user = normalize_user(extract_task_user(task_text))
     return bool(normalized_task_user) and normalized_task_user != UNKNOWN_USER and (
