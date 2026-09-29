@@ -76,14 +76,62 @@ The method to get the Google Tasks API is complex and will require a guide (You 
 
 Get your API token from the Todoist app under Settings -> Integrations -> Developer, and put it in `.env` as `TODOIST_API_TOKEN`. No browser login step is needed.
 
+## Scheduling
+
+The best way to use this script is to run it on a set schedule using your Operating System's task scheduler.The example schedule for both Windows and Linux runs the script 1 minute after every system startup.
+
+### Windows Task Scheduler
+
+Open Task Scheduler and click **Create Task** (do not select Basic Task).
+
+**Triggers tab:** Click **New**, set "Begin the task" to **At startup**, and check **Delay task for:** `1 minute`.
+(You can change this trigger to run daily, weekly, or on any custom schedule that fits your needs).
+**General tab:** Check **Run whether user is logged on or not** to ensure it runs completely in the background on boot.
+**Actions tab:** Click **New**, set "Action" to **Start a program**, and configure it as follows:
+
+* **Program/script:** `cmd.exe`
+* **Add arguments:**
+
+```cmd
+/c "C:\route\to\KCLS-manager\.venv\Scripts\python.exe C:\route\to\KCLS-manager\kcls_parser.py > NUL 2>> C:\route\to\KCLS-manager\library_crash.log"
+
+```
+
+*Note: In Windows, the virtual environment's Python executable is located in `.venv\Scripts\python.exe`. Standard output is discarded to `NUL`, and `cmd.exe /c` is strictly required to process the output redirection (`> NUL 2>>`).*
+
+Press **OK**, type your password, then finish the setup with any other desired conditions.
+
+### Linux Cron jobs
+
+In your terminal, enter the crontab editing window using
+
+```bash
+crontab -e
+```
+
+This will open the crontab config file in your distro's text editor. The config contains a lot of info on crontab scheduling. At the bottom of the file, add your schedule. An example schedule is:
+
+```bash
+@reboot sleep 60 && /path/to/KCLS-manager/.venv/bin/python /path/to/KCLS-manager/kcls_parser.py >/dev/null 2>>/path/to/KCLS-manager/library_crash.log
+```
+
+This example runs the script 1 minute after every startup or reboot. Any regular output is discarded and errors (`2`) are output into `library_crash.log`.
+
+The crontab config can be listed with:
+
+```bash
+crontab -l
+```
+
 ## Miscellaneous
 
 ### Current Limitations and future plans
 
 * Checkout due dates are read when the receipt is processed, but the tasks are not updated yet when KCLS renews a loan.
 * "Your hold has expired" emails are not parsed yet
-* Direct calendar support will be added sometime.
+* Direct calendar events arent supported yet.
 * Current IMAP connection is limited to Gmail, with the only current supported auth being the app password.
+* Limited to 2 task managers, with no simultaneous tasks
 * The email parser is organized into small functions, but it still processes one email at a time and uses the existing task-manager APIs.
 
 Code partly made with Google Gemini 3.1 Pro and Claude Code

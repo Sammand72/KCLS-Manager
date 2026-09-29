@@ -314,6 +314,48 @@ def connect_to_gmail(max_retries=10, wait_seconds=15):
     raise SystemExit
 
 
+def login_to_gmail(mail, username, password, max_attempts=3, wait_seconds=15):
+    """Log in to Gmail, retrying temporary IMAP errors but not bad credentials."""
+    for attempt in range(max_attempts):
+        try:
+            mail.login(username, password)
+            get_tracer_logger().info("Logged in to the mail server.")
+            return
+        except imaplib.IMAP4.error as error:
+            error_text = str(error).upper()
+            authentication_failed = any(
+                message in error_text
+                for message in (
+                    "AUTHENTICATIONFAILED",
+                    "INVALID CREDENTIALS",
+                    "LOGIN FAILED",
+                )
+            )
+            if authentication_failed:
+                get_tracer_logger().error(
+                    "Could not authenticate with the mail server. "
+                    "Check EMAIL_USER and EMAIL_PASS."
+                )
+                raise SystemExit
+
+            if attempt + 1 == max_attempts:
+                get_tracer_logger().error(
+                    "Could not log in to mail server after %s attempts. "
+                    "Exiting script.",
+                    max_attempts,
+                )
+                raise SystemExit
+
+            get_tracer_logger().warning(
+                "Mail server login failed temporarily "
+                "(Attempt %s/%s). Waiting %s seconds...",
+                attempt + 1,
+                max_attempts,
+                wait_seconds,
+            )
+            time.sleep(wait_seconds)
+
+
 def search_unread_holds(mail):
     """Find unread KCLS emails saying that a hold is ready."""
     status, messages = mail.search(
@@ -616,7 +658,7 @@ def main():
 
     mail = connect_to_gmail()
     try:
-        mail.login(os.getenv('EMAIL_USER'), os.getenv('EMAIL_PASS'))
+        login_to_gmail(mail, os.getenv('EMAIL_USER'), os.getenv('EMAIL_PASS'))
         mail.select('inbox')
         hold_email_ids = search_unread_holds(mail)
         receipt_email_ids = search_unread_receipts(mail)

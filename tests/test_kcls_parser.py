@@ -1,9 +1,11 @@
 import json
+import imaplib
 import tempfile
 import unittest
 from email.message import EmailMessage
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from kcls_parser import (
     build_location_address_mapping,
@@ -210,6 +212,66 @@ Author:
 
         self.assertEqual(search_unread_holds(mail), [])
         self.assertEqual(search_unread_receipts(mail), [])
+
+    def test_imap_login_succeeds_on_first_attempt(self):
+        from kcls_parser import login_to_gmail
+
+        mail = SimpleNamespace(login=lambda *args: ("OK", []))
+
+        login_to_gmail(mail, "user", "password", wait_seconds=0)
+
+    def test_imap_login_retries_temporary_failure(self):
+        from kcls_parser import login_to_gmail
+
+        login_attempts = []
+
+        def login(*args):
+            if not login_attempts:
+                login_attempts.append(args)
+                raise imaplib.IMAP4.error("temporary failure")
+            return ("OK", [])
+
+        mail = SimpleNamespace(login=login)
+
+        with patch("kcls_parser.time.sleep") as sleep:
+            login_to_gmail(mail, "user", "password", wait_seconds=0)
+
+        sleep.assert_called_once_with(0)
+
+    def test_imap_login_stops_after_temporary_failures(self):
+        from kcls_parser import login_to_gmail
+
+        mail = SimpleNamespace(
+            login=lambda *args: (_ for _ in ()).throw(
+                imaplib.IMAP4.error("temporary failure")
+            )
+        )
+
+        with patch("kcls_parser.time.sleep") as sleep:
+            with self.assertRaises(SystemExit):
+                login_to_gmail(mail, "user", "password", wait_seconds=0)
+
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_imap_login_does_not_retry_authentication_failure(self):
+        from kcls_parser import login_to_gmail
+
+        login_calls = []
+
+        def login(*args):
+            login_calls.append(args)
+            raise imaplib.IMAP4.error(
+                "[AUTHENTICATIONFAILED] Invalid credentials"
+            )
+
+        mail = SimpleNamespace(login=login)
+
+        with patch("kcls_parser.time.sleep") as sleep:
+            with self.assertRaises(SystemExit):
+                login_to_gmail(mail, "user", "password", wait_seconds=0)
+
+        self.assertEqual(len(login_calls), 1)
+        sleep.assert_not_called()
 
     def test_invalid_task_manager_is_rejected(self):
         with self.assertRaises(ValueError):
