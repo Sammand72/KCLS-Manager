@@ -10,6 +10,8 @@ from kcls_tasker_gtasks import (
     get_tasklist_id,
     get_tasklist_name,
     mark_hold_complete_google,
+    complete_due_book_google,
+    update_due_book_google,
 )
 from kcls_tasker_todoist import (
     add_hold_to_todoist,
@@ -17,11 +19,15 @@ from kcls_tasker_todoist import (
     get_project_id,
     get_project_name,
     mark_hold_complete_todoist,
+    complete_due_book_todoist,
+    update_due_book_todoist,
 )
 from kcls_parser import (
     add_hold_to_task_manager,
     process_hold_emails,
     process_receipt_emails,
+    process_due_date_emails,
+    process_checkin_emails,
 )
 from kcls_task_matching import (
     extract_task_user,
@@ -32,34 +38,48 @@ from kcls_task_matching import (
 
 class MatcherTests(unittest.TestCase):
     def test_empty_titles_do_not_match(self):
-        self.assertFalse(titles_match("", "Anything"))
-        self.assertFalse(titles_match("Anything", ""))
+        self.assertFalse(titles_match(
+            checkout_title="", hold_title="Anything"))
+        self.assertFalse(titles_match(
+            checkout_title="Anything", hold_title=""))
 
     def test_short_title_does_not_match_inside_longer_hold_title(self):
-        self.assertFalse(titles_match("It", "Little Women"))
-        self.assertFalse(titles_match("Little Women", "It"))
+        self.assertFalse(titles_match(
+            checkout_title="It", hold_title="Little Women"))
+        self.assertFalse(titles_match(
+            checkout_title="Little Women", hold_title="It"))
 
     def test_short_or_embedded_hold_titles_do_not_match(self):
-        self.assertFalse(titles_match("Dune Messiah", "Dune"))
-        self.assertTrue(titles_match("Dune", "Dune"))
+        self.assertFalse(titles_match(
+            checkout_title="Dune Messiah", hold_title="Dune"))
+        self.assertTrue(titles_match(
+            checkout_title="Dune", hold_title="Dune"))
 
     def test_cut_off_hold_title_matches_full_checkout_title(self):
         self.assertTrue(titles_match(
-            "Everything you need to ace English Language Arts in one big fat "
-            "notebook : the complete middle school study guide",
-            "Everything You Need To Ace English Language Arts In One Big Fat "
-            "Notebook :",
+            checkout_title=(
+                "Everything you need to ace English Language Arts in one big fat "
+                "notebook : the complete middle school study guide"),
+            hold_title=(
+                "Everything You Need To Ace English Language Arts In One Big Fat "
+                "Notebook :"),
         ))
 
     def test_angle_bracket_and_punctuation_are_ignored(self):
         self.assertTrue(titles_match(
-            "The social animal : the hidden sources of love, character, and achievement",
-            "The Social Animal : The Hidden Sources Of Love, Character, And Achievement<",
+            checkout_title=(
+                "The social animal : the hidden sources of love, character, "
+                "and achievement"),
+            hold_title=(
+                "The Social Animal : The Hidden Sources Of Love, Character, "
+                "And Achievement<"),
         ))
 
     def test_accents_are_preserved(self):
-        self.assertTrue(titles_match("Café Society", "CAFÉ SOCIETY"))
-        self.assertFalse(titles_match("Cafe Society", "Café Society"))
+        self.assertTrue(titles_match(
+            checkout_title="Café Society", hold_title="CAFÉ SOCIETY"))
+        self.assertFalse(titles_match(
+            checkout_title="Cafe Society", hold_title="Café Society"))
 
     def test_user_matching_requires_same_known_user(self):
         self.assertEqual(extract_task_user(
@@ -255,6 +275,94 @@ class TaskMatchingBackendTests(unittest.TestCase):
 
         self.assertEqual(service.task_api.completed, ["right-user"])
 
+    def test_google_due_date_update_uses_title_and_user_matching(self):
+        tasks = [
+            {
+                "id": "wrong-user",
+                "title": "KCLS book due: A Very Long Book",
+                "notes": "Account: Alex",
+            },
+            {
+                "id": "right-user",
+                "title": "KCLS book due: A Very Long Book Full Edition",
+                "notes": "Account: Sam",
+            },
+        ]
+        service = FakeGoogleService(tasks)
+        from datetime import datetime
+
+        update_due_book_google(
+            "A Very Long Book", "Sam", datetime(2026, 10, 15),
+            service=service, target_list_id="list")
+
+        self.assertEqual(service.task_api.updated[0]["task"], "right-user")
+        self.assertEqual(
+            service.task_api.updated[0]["body"]["due"],
+            "2026-10-15T00:00:00",
+        )
+
+    def test_todoist_due_date_update_uses_title_and_user_matching(self):
+        from datetime import datetime
+
+        tasks = [
+            SimpleNamespace(
+                id="right-user",
+                content="KCLS book due: A Very Long Book Full Edition",
+                description="Account: Sam",
+            ),
+        ]
+        updates = []
+        api = SimpleNamespace(
+            get_tasks=lambda project_id: [tasks],
+            update_task=lambda *args, **kwargs: updates.append((args, kwargs)),
+        )
+
+        update_due_book_todoist(
+            "A Very Long Book", "Sam", datetime(2026, 10, 15),
+            api=api, target_project_id="project")
+
+        self.assertEqual(updates[0][0], ("right-user",))
+        self.assertEqual(updates[0][1]["due_date"].isoformat(), "2026-10-15")
+
+    def test_google_checkin_completes_matching_due_task_only(self):
+        tasks = [
+            {
+                "id": "pickup",
+                "title": "KCLS book pickup: The Mark of Athena",
+                "notes": "Account: Sam",
+            },
+            {
+                "id": "due",
+                "title": "KCLS book due: The Mark of Athena",
+                "notes": "Author: Rick Riordan\nAccount: Sam",
+            },
+        ]
+        service = FakeGoogleService(tasks)
+
+        complete_due_book_google(
+            "The mark of Athena",
+            service=service, target_list_id="list")
+
+        self.assertEqual(service.task_api.completed, ["due"])
+
+    def test_todoist_checkin_completes_matching_due_task(self):
+        task = SimpleNamespace(
+            id="due",
+            content="KCLS book due: The Mark of Athena",
+            description="Account: Sam",
+        )
+        completed = []
+        api = SimpleNamespace(
+            get_tasks=lambda project_id: [[task]],
+            complete_task=lambda task_id: completed.append(task_id),
+        )
+
+        complete_due_book_todoist(
+            "The mark of Athena",
+            api=api, target_project_id="project")
+
+        self.assertEqual(completed, ["due"])
+
     def test_google_completion_follows_next_page_token(self):
         service = FakeGoogleService([], pages=[
             {
@@ -403,6 +511,40 @@ class TaskMatchingBackendTests(unittest.TestCase):
         record_event.assert_not_called()
         add_due.assert_not_called()
         complete.assert_not_called()
+
+    def test_due_date_email_updates_existing_task(self):
+        message = self.make_message(
+            "Account:\n123\nTitle\nA Book\nDue Date\n"
+            "October 15, 2026\n")
+        mail = SimpleNamespace(store=lambda *args: None)
+
+        with patch("kcls_parser.fetch_message", return_value=message), \
+                patch("kcls_parser.update_due_book_in_task_manager") as update:
+            process_due_date_emails(mail, [b"1"], {"123": "Sam"}, "google")
+
+        update.assert_called_once()
+        self.assertEqual(update.call_args.args[1]["title"], "A Book")
+        self.assertEqual(update.call_args.args[1]["user"], "Sam")
+
+    def test_checkin_email_completes_each_returned_book(self):
+        message = self.make_message(
+            "Checkin\n-------------------------\n"
+            "The Mark of Athena / Rick Riordan.\n"
+            "31000053765882\n-------------------------\n"
+            "Forest Of Shadows\n31000000000000\n"
+            "-------------------------\nNumber of checked in items 2"
+        )
+        mail = SimpleNamespace(store=lambda *args: None)
+
+        with patch("kcls_parser.fetch_message", return_value=message), \
+                patch("kcls_parser.complete_due_book_in_task_manager") as complete:
+            process_checkin_emails(mail, [b"1"], "google")
+
+        self.assertEqual(complete.call_count, 2)
+        self.assertEqual(
+            [call.args[1] for call in complete.call_args_list],
+            ["The Mark of Athena", "Forest Of Shadows"],
+        )
 
     def test_blank_hold_title_has_no_task_side_effects(self):
         message = self.make_message(

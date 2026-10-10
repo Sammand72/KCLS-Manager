@@ -79,7 +79,9 @@ def get_tasklist_id(service, target_name):
             return tasklist['id']  # We found the secret ID!
 
     TRACER_LOGGER.warning(
-        f"Warning: Could not find a list named '{target_name}'. Using default.")
+        "Warning: Could not find a list named '%s'. Using default.",
+        target_name,
+    )
     return '@default'
 
 
@@ -143,7 +145,9 @@ def expire_hold_google(
 
             task_title = task['title'].lower().strip().removeprefix(
                 TASK_TITLE_PREFIX.lower())
-            if titles_match(book_title, task_title) and users_match(
+            if titles_match(
+                    checkout_title=book_title,
+                    hold_title=task_title) and users_match(
                     account_user, task.get('notes', '')):
                 expired_title = (
                     f"{EXPIRED_TASK_TITLE_PREFIX}"
@@ -188,6 +192,57 @@ def add_due_book_to_google(
     TRACER_LOGGER.info("Google Tasks due-date task created successfully")
 
 
+def update_due_book_google(
+        book_title, account_user, due_datetime, service=None,
+        target_list_id=None):
+    """Update the matching open Google Tasks due-date task."""
+    if service is None:
+        service = authenticate_google_tasks()
+
+    if target_list_id is None:
+        target_list_id = get_tasklist_id(service, get_tasklist_name())
+
+    page_token = None
+    while True:
+        list_request_args = {
+            'tasklist': target_list_id,
+            'showCompleted': False,
+            'maxResults': 100,
+        }
+        if page_token:
+            list_request_args['pageToken'] = page_token
+
+        results = service.tasks().list(**list_request_args).execute()
+        for task in results.get('items', []):
+            if not task['title'].lower().strip().startswith(
+                    DUE_TASK_TITLE_PREFIX.lower()):
+                continue
+
+            task_title = task['title'].lower().strip().removeprefix(
+                DUE_TASK_TITLE_PREFIX.lower())
+            if not titles_match(
+                    checkout_title=task_title,
+                    hold_title=book_title):
+                continue
+            if account_user != "Unknown user" and not users_match(
+                    account_user, task.get('notes', '')):
+                continue
+
+            task_payload = {'due': due_datetime.isoformat()}
+            service.tasks().patch(
+                tasklist=target_list_id,
+                task=task['id'],
+                body=task_payload,
+            ).execute()
+            TRACER_LOGGER.info(
+                "Updated due date for '%s' in Google Tasks", task['title'])
+            return
+
+        page_token = results.get('nextPageToken')
+        if not page_token:
+            break
+
+
 def mark_hold_complete_google(
         book_title, checkout_user="Unknown user", service=None,
         target_list_id=None):
@@ -222,7 +277,9 @@ def mark_hold_complete_google(
             task_title = task['title'].lower().strip().removeprefix(
                 TASK_TITLE_PREFIX.lower())
 
-            if titles_match(book_title, task_title) and users_match(
+            if titles_match(
+                    checkout_title=book_title,
+                    hold_title=task_title) and users_match(
                     checkout_user, task.get('notes', '')):
                 TRACER_LOGGER.info(
                     "Marking '%s' complete in Google Tasks", task['title'])
@@ -239,5 +296,53 @@ def mark_hold_complete_google(
         if not page_token:
             break
 
+
+def complete_due_book_google(
+        book_title, service=None, target_list_id=None):
+    """Find a matching open due-date task and mark it complete."""
+    if service is None:
+        service = authenticate_google_tasks()
+
+    if target_list_id is None:
+        target_list_id = get_tasklist_id(service, get_tasklist_name())
+
+    page_token = None
+    while True:
+        list_request_args = {
+            'tasklist': target_list_id,
+            'showCompleted': False,
+            'maxResults': 100,
+        }
+        if page_token:
+            list_request_args['pageToken'] = page_token
+
+        results = service.tasks().list(**list_request_args).execute()
+        for task in results.get('items', []):
+            if not task['title'].lower().strip().startswith(
+                    DUE_TASK_TITLE_PREFIX.lower()):
+                continue
+
+            task_title = task['title'].lower().strip().removeprefix(
+                DUE_TASK_TITLE_PREFIX.lower())
+            if titles_match(
+                    checkout_title=task_title,
+                    hold_title=book_title):
+                service.tasks().patch(
+                    tasklist=target_list_id,
+                    task=task['id'],
+                    body={'status': 'completed'},
+                ).execute()
+                TRACER_LOGGER.info(
+                    "Marked returned book '%s' complete in Google Tasks",
+                    task['title'])
+                return
+
+        page_token = results.get('nextPageToken')
+        if not page_token:
+            break
+
     TRACER_LOGGER.info(
-        f"\nNo matching Google Tasks hold found for '{book_title}' (probably wasn't on hold).")
+        "\nNo matching Google Tasks hold found for '%s' "
+        "(probably wasn't on hold).",
+        book_title,
+    )

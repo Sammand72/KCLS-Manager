@@ -20,6 +20,8 @@ from kcls_tasker_gtasks import (
     get_tasklist_id,
     get_tasklist_name,
     mark_hold_complete_google,
+    update_due_book_google,
+    complete_due_book_google,
 )
 from kcls_tasker_todoist import (
     add_due_book_to_todoist,
@@ -29,6 +31,8 @@ from kcls_tasker_todoist import (
     get_project_id,
     get_project_name,
     mark_hold_complete_todoist,
+    update_due_book_todoist,
+    complete_due_book_todoist,
 )
 
 
@@ -36,7 +40,9 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 # These labels help tell an empty value apart from the next label.
-KNOWN_LABELS = ("Title", "Account:", "Author", "Pickup Location", "Pickup by")
+KNOWN_LABELS = (
+    "Title", "Account:", "Author", "Pickup Location", "Pickup by", "Due Date",
+)
 TRACER_LOGGER_NAME = "kcls.tracer"
 RECORD_LOGGER_NAME = "kcls.records"
 
@@ -297,6 +303,83 @@ def parse_checkout_receipt(message, user_mapping):
     return checked_out_books
 
 
+def parse_due_date_email(message, user_mapping):
+    """Parse renewed book titles, accounts, and due dates from one email."""
+    lines = [line.strip() for line in get_message_text(message).splitlines()]
+    renewed_books = []
+    current_book = {}
+    account_number = ""
+    user = "Unknown user"
+
+    for index, current_line in enumerate(lines):
+        if current_line == "Title":
+            if "title" in current_book:
+                renewed_books.append(current_book)
+
+            current_book = {
+                "title": value_after(lines, index),
+                "account_number": account_number,
+                "user": user,
+                "due_date": None,
+            }
+        elif current_line == "Account:":
+            account_number = value_after(lines, index)
+            user = user_mapping.get(account_number, "Unknown user")
+        elif current_line in ("Due Date", "Date Due") and "title" in current_book:
+            due_date_text = value_after(lines, index)
+            current_book["due_date"] = dateparser.parse(
+                due_date_text,
+                settings={
+                    'TIMEZONE': 'America/Los_Angeles',
+                    'RETURN_AS_TIMEZONE_AWARE': True,
+                },
+            )
+
+    if "title" in current_book:
+        renewed_books.append(current_book)
+
+    return renewed_books
+
+
+def parse_checkin_email(message):
+    """Parse returned book titles from a plain-text KCLS check-in email."""
+    lines = [line.strip() for line in get_message_text(message).splitlines()]
+    try:
+        checkin_index = next(
+            index for index, line in enumerate(lines)
+            if line.lower() == "checkin"
+        )
+    except StopIteration:
+        return []
+
+    books = []
+    block_lines = []
+    for line in lines[checkin_index + 1:]:
+        if line.lower().startswith("number of checked in items"):
+            break
+        if re.fullmatch(r"-{3,}", line):
+            if block_lines:
+                barcode_index = next(
+                    (
+                        index for index, block_line in enumerate(block_lines)
+                        if block_line.isdigit()
+                    ),
+                    None,
+                )
+                if barcode_index is not None:
+                    title = " ".join(block_lines[:barcode_index]).strip()
+                    if " / " in title:
+                        title = title.split(" / ", 1)[0].rstrip(" .")
+                    if title:
+                        books.append(title)
+                block_lines = []
+            continue
+        if line:
+            block_lines.append(line)
+
+    return books
+
+
 def connect_to_gmail(max_retries=10, wait_seconds=15):
     """Connect to Gmail, retrying when the internet is not ready yet."""
     for attempt in range(max_retries):
@@ -306,13 +389,18 @@ def connect_to_gmail(max_retries=10, wait_seconds=15):
             return mail
         except Exception:
             get_tracer_logger().warning(
-                f"Mail server not ready yet (Attempt {attempt + 1}/{max_retries}). "
-                f"Waiting {wait_seconds} seconds..."
+                "Mail server not ready yet (Attempt %s/%s). "
+                "Waiting %s seconds...",
+                attempt + 1,
+                max_retries,
+                wait_seconds,
             )
             time.sleep(wait_seconds)
 
     get_tracer_logger().error(
-        f"Could not connect to mail server after {max_retries} attempts. Exiting script.")
+        "Could not connect to mail server after %s attempts. Exiting script.",
+        max_retries,
+    )
     raise SystemExit
 
 
@@ -388,6 +476,44 @@ def search_unread_receipts(mail):
     if status != 'OK' or not messages:
         get_tracer_logger().error(
             "Could not search for unread checkout receipts in IMAP Gmail "
+            "(status: %s)",
+            status,
+        )
+        return []
+
+    return messages[0].split()
+
+
+def search_unread_due_dates(mail):
+    """Find unread KCLS emails containing renewed book due dates."""
+    status, messages = mail.search(
+        None,
+        '(FROM "noreply@kcls.org")',
+        'UNSEEN',
+        '(SUBJECT "Due Dates")',
+    )
+    if status != 'OK' or not messages:
+        get_tracer_logger().error(
+            "Could not search for unread renewal emails in IMAP Gmail "
+            "(status: %s)",
+            status,
+        )
+        return []
+
+    return messages[0].split()
+
+
+def search_unread_checkins(mail):
+    """Find unread KCLS emails about returned books."""
+    status, messages = mail.search(
+        None,
+        '(FROM "No-Reply-AMH-Notify@kcls.org")',
+        'UNSEEN',
+        '(OR (SUBJECT "Checkin") (SUBJECT "Items Returned Receipt"))',
+    )
+    if status != 'OK' or not messages:
+        get_tracer_logger().error(
+            "Could not search for unread check-in emails in IMAP Gmail "
             "(status: %s)",
             status,
         )
@@ -510,6 +636,39 @@ def add_due_book_to_task_manager(task_manager, book, task_context=None):
         add_due_book_to_google(**task_arguments)
 
 
+def update_due_book_in_task_manager(task_manager, book, task_context=None):
+    """Update one existing due-date task with a renewed due date."""
+    validate_task_manager(task_manager)
+
+    task_arguments = {
+        'book_title': book['title'],
+        'account_user': book['user'],
+        'due_datetime': book['due_date'],
+    }
+    if task_context is not None:
+        task_arguments.update(task_context)
+
+    if task_manager == 'todoist':
+        update_due_book_todoist(**task_arguments)
+    else:
+        update_due_book_google(**task_arguments)
+
+
+def complete_due_book_in_task_manager(
+        task_manager, book_title, task_context=None):
+    """Mark one existing due-date task complete after a book is returned."""
+    validate_task_manager(task_manager)
+
+    task_arguments = {'book_title': book_title}
+    if task_context is not None:
+        task_arguments.update(task_context)
+
+    if task_manager == 'todoist':
+        complete_due_book_todoist(**task_arguments)
+    else:
+        complete_due_book_google(**task_arguments)
+
+
 def process_hold_emails(
         mail, email_ids, user_mapping, task_manager, task_context=None,
         location_addresses=None):
@@ -518,7 +677,8 @@ def process_hold_emails(
         get_tracer_logger().info("No unread KCLS hold mails found!")
         return
 
-    get_tracer_logger().info(f"Found {len(email_ids)} unread hold email(s)")
+    get_tracer_logger().info(
+        "Found %s unread hold email(s)", len(email_ids))
     hold_count = 0
 
     for email_id in email_ids:
@@ -593,7 +753,7 @@ def process_receipt_emails(
         return
 
     get_tracer_logger().info(
-        f"Found {len(email_ids)} unread checkout receipt email(s)")
+        "Found %s unread checkout receipt email(s)", len(email_ids))
 
     for email_id in email_ids:
         try:
@@ -654,12 +814,77 @@ def process_receipt_emails(
                 "Failed to process checkout receipt %s", email_id)
 
 
+def process_due_date_emails(
+        mail, email_ids, user_mapping, task_manager, task_context=None):
+    """Parse renewal emails and update their existing due-date tasks."""
+    if not email_ids:
+        get_tracer_logger().info("No unread KCLS renewal emails found!")
+        return
+
+    for email_id in email_ids:
+        try:
+            message = fetch_message(mail, email_id)
+            if message is None:
+                continue
+
+            renewed_books = parse_due_date_email(message, user_mapping)
+            for book in renewed_books:
+                if not book['title'].strip() or book['due_date'] is None:
+                    continue
+
+                record_library_event(
+                    "due_date_updated",
+                    {
+                        "title": book['title'],
+                        "user": book['user'],
+                        "due_date": book['due_date'],
+                    },
+                )
+                update_due_book_in_task_manager(
+                    task_manager, book, task_context)
+
+            mail.store(email_id, '+FLAGS', '\\Seen')
+        except Exception:
+            get_tracer_logger().exception(
+                "Failed to process renewal email %s", email_id)
+
+
+def process_checkin_emails(
+        mail, email_ids, task_manager, task_context=None):
+    """Parse returned books and complete their existing due-date tasks."""
+    if not email_ids:
+        get_tracer_logger().info("No unread KCLS check-in emails found!")
+        return
+
+    for email_id in email_ids:
+        try:
+            message = fetch_message(mail, email_id)
+            if message is None:
+                continue
+
+            returned_books = parse_checkin_email(message)
+            for book_title in returned_books:
+                record_library_event(
+                    "checkin",
+                    {"title": book_title},
+                )
+                complete_due_book_in_task_manager(
+                    task_manager, book_title, task_context)
+
+            mail.store(email_id, '+FLAGS', '\\Seen')
+        except Exception:
+            get_tracer_logger().exception(
+                "Failed to process check-in email %s", email_id)
+
+
 def main():
     """Run the email scanner from start to finish."""
     today = datetime.now().astimezone()
     configure_logging(script_dir)
     get_tracer_logger().info(
-        f"\n\nStarting on {today.strftime('%A, %B %d, %Y at %I:%M %p')}")
+        "\n\nStarting on %s",
+        today.strftime('%A, %B %d, %Y at %I:%M %p'),
+    )
 
     env_path = os.path.join(script_dir, '.env')
     json_path = os.path.join(script_dir, 'users.json')
@@ -667,7 +892,7 @@ def main():
 
     load_dotenv(dotenv_path=env_path)
     task_manager = os.getenv('TASK_MANAGER', 'google').strip().lower()
-    get_tracer_logger().info(f"Selected Task Manager: {task_manager}")
+    get_tracer_logger().info("Selected Task Manager: %s", task_manager)
     validate_task_manager(task_manager)
 
     with open(json_path, 'r') as file:
@@ -680,8 +905,11 @@ def main():
         mail.select('inbox')
         hold_email_ids = search_unread_holds(mail)
         receipt_email_ids = search_unread_receipts(mail)
+        due_date_email_ids = search_unread_due_dates(mail)
+        checkin_email_ids = search_unread_checkins(mail)
         task_context = None
-        if hold_email_ids or receipt_email_ids:
+        if (hold_email_ids or receipt_email_ids or due_date_email_ids or
+                checkin_email_ids):
             task_context = create_task_manager_context(task_manager)
         process_hold_emails(
             mail,
@@ -695,6 +923,19 @@ def main():
             mail,
             receipt_email_ids,
             user_mapping,
+            task_manager,
+            task_context,
+        )
+        process_due_date_emails(
+            mail,
+            due_date_email_ids,
+            user_mapping,
+            task_manager,
+            task_context,
+        )
+        process_checkin_emails(
+            mail,
+            checkin_email_ids,
             task_manager,
             task_context,
         )

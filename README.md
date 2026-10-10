@@ -1,18 +1,19 @@
 # KCLS Library Manager
 
-A headless Python automation script that silently monitors an email inbox for King County Library System (KCLS) Hold and Checkout emails. It parses the email for book titles, authors, pickup locations, and deadlines, and automatically pushes them to a Task Manager.
+A headless Python automation script that silently monitors an email inbox for King County Library System (KCLS) emails. It parses the email for book titles, authors, pickup locations, and deadlines, and automatically pushes them to a Task Manager.
 
 > [!NOTE]
-> This script requires you to enable email notifications. When checking out a book, email receipt has to be enabled for the auto-completion of tasks to work.
+> This script requires you to enable email notifications. When checking out/in a book, email receipt has to be enabled for the auto-completion of tasks to work.
 
 ## Features
 
 * Uses IMAP to find all unread automated library emails matching the relevant subject, not just the latest one.
 * Handles multiple books in a single email and calculates days remaining until the deadline.
-* Maps different library card numbers to specific family members.
+* Maps different library card numbers to specific users.
 * Adds the pickup library's street address to hold-task notes and descriptions.
 * Creates due-date tasks for all books on a checkout receipt, including books that were not holds
 * Auto-completes hold tasks when the corresponding book shows up on a checkout receipt
+* Auto-updates due tasks when renewal emails show up, and completes the task when there is a check-in email
 * Matches checkout receipt names to the names in `users.json`
 * Designed to run on startup via Windows Task Scheduler/Linux Cron with separate library records and operational logs.
 
@@ -127,10 +128,11 @@ crontab -l
 
 ### Current Limitations and future plans
 
-* Checkout due dates are read when the receipt is processed, but the tasks are not updated yet when KCLS renews a loan.
+* All email types are supported but a cancelled hold will not send an email, so the task will have to be manually removed. OVERDUE tasks arent changed.
 * Direct calendar events arent supported yet.
 * Current IMAP connection is limited to Gmail, with the only current supported auth being the app password.
 * Limited to 2 task managers, with no simultaneous tasks
 * The email parser is organized into small functions, but it still processes one email at a time and uses the existing task-manager APIs.
+* Web scraper version is planned
 
-Code partly made with Google Gemini 3.1 Pro and Claude Code
+Code was partly made with Google Gemini 3.1 Pro and Claude Code (CLAUDE.md IS STALE!!!!).

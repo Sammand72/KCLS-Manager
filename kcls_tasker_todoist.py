@@ -35,7 +35,10 @@ def get_project_id(api, target_name):
                 return project.id  # We found the matching project!
 
     TRACER_LOGGER.warning(
-        f"Warning: Could not find a project named '{target_name}'. Using Todoist's default Inbox.")
+        "Warning: Could not find a project named '%s'. "
+        "Using Todoist's default Inbox.",
+        target_name,
+    )
     return None
 
 
@@ -87,7 +90,9 @@ def expire_hold_todoist(
 
             task_title = task.content.lower().strip().removeprefix(
                 TASK_TITLE_PREFIX.lower())
-            if titles_match(book_title, task_title) and users_match(
+            if titles_match(
+                    checkout_title=book_title,
+                    hold_title=task_title) and users_match(
                     account_user, getattr(task, 'description', '')):
                 expired_title = (
                     f"{EXPIRED_TASK_TITLE_PREFIX}"
@@ -124,6 +129,41 @@ def add_due_book_to_todoist(
     TRACER_LOGGER.info("Todoist due-date task created successfully")
 
 
+def update_due_book_todoist(
+        book_title, account_user, due_datetime, api=None,
+        target_project_id=None):
+    """Update the matching open Todoist due-date task."""
+    if api is None:
+        api = authenticate_todoist()
+
+    if target_project_id is None:
+        target_project_id = get_project_id(api, get_project_name())
+
+    for task_page in api.get_tasks(project_id=target_project_id):
+        for task in task_page:
+            if not task.content.lower().strip().startswith(
+                    DUE_TASK_TITLE_PREFIX.lower()):
+                continue
+
+            task_title = task.content.lower().strip().removeprefix(
+                DUE_TASK_TITLE_PREFIX.lower())
+            if not titles_match(
+                    checkout_title=task_title,
+                    hold_title=book_title):
+                continue
+            if account_user != "Unknown user" and not users_match(
+                    account_user, getattr(task, 'description', '')):
+                continue
+
+            api.update_task(
+                task.id,
+                due_date=due_datetime.date(),
+            )
+            TRACER_LOGGER.info(
+                "Updated due date for '%s' in Todoist", task.content)
+            return
+
+
 def mark_hold_complete_todoist(
         book_title, checkout_user="Unknown user", api=None,
         target_project_id=None):
@@ -145,7 +185,9 @@ def mark_hold_complete_todoist(
             task_title = task.content.lower().strip().removeprefix(
                 TASK_TITLE_PREFIX.lower())
 
-            if titles_match(book_title, task_title) and users_match(
+            if titles_match(
+                    checkout_title=book_title,
+                    hold_title=task_title) and users_match(
                     checkout_user, getattr(task, 'description', '')):
                 api.complete_task(task.id)
                 TRACER_LOGGER.info(
@@ -153,4 +195,34 @@ def mark_hold_complete_todoist(
                 return
 
     TRACER_LOGGER.info(
-        f"No matching Todoist hold task found for '{book_title}' (probably wasn't on hold).")
+        "No matching Todoist hold task found for '%s' "
+        "(probably wasn't on hold).",
+        book_title,
+    )
+
+
+def complete_due_book_todoist(
+        book_title, api=None, target_project_id=None):
+    """Find a matching open due-date task and mark it complete."""
+    if api is None:
+        api = authenticate_todoist()
+
+    if target_project_id is None:
+        target_project_id = get_project_id(api, get_project_name())
+
+    for task_page in api.get_tasks(project_id=target_project_id):
+        for task in task_page:
+            if not task.content.lower().strip().startswith(
+                    DUE_TASK_TITLE_PREFIX.lower()):
+                continue
+
+            task_title = task.content.lower().strip().removeprefix(
+                DUE_TASK_TITLE_PREFIX.lower())
+            if titles_match(
+                    checkout_title=task_title,
+                    hold_title=book_title):
+                api.complete_task(task.id)
+                TRACER_LOGGER.info(
+                    "Marked returned book '%s' complete in Todoist",
+                    task.content)
+                return

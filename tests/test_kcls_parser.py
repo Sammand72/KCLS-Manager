@@ -15,10 +15,14 @@ from kcls_parser import (
     get_location_address,
     load_location_addresses,
     parse_checkout_receipt,
+    parse_checkin_email,
+    parse_due_date_email,
     parse_hold_email,
     record_library_event,
     search_unread_holds,
     search_unread_receipts,
+    search_unread_due_dates,
+    search_unread_checkins,
     validate_task_manager,
 )
 
@@ -148,6 +152,73 @@ You checked out the following items:
         self.assertEqual(books[0]["due_date"].strftime(
             "%Y-%m-%d"), "2026-10-06")
 
+    def test_parse_due_date_html_email(self):
+        message = self.make_message(
+            "<p>Account:</p><p>12345</p><p>Title</p><p>HTML Book</p>"
+            "<p>Date Due</p>"
+            "<p>October 15, 2026</p>",
+            content_type="text/html",
+        )
+
+        books = parse_due_date_email(message, {"12345": "Sam"})
+
+        self.assertEqual(books[0]["title"], "HTML Book")
+        self.assertEqual(books[0]["user"], "Sam")
+        self.assertEqual(books[0]["due_date"].strftime(
+            "%Y-%m-%d"), "2026-10-15")
+
+    def test_parse_multiple_due_date_html_books(self):
+        message = self.make_message(
+            "<p>Item(s) Renewed:</p>"
+            "<p>Title</p><p>First Renewed Book</p>"
+            "<p>Date Due</p><p>11/3/2026</p>"
+            "<p>Title</p><p>Second Renewed Book</p>"
+            "<p>Date Due</p><p>11/3/2026</p>",
+            content_type="text/html",
+        )
+
+        books = parse_due_date_email(message, {})
+
+        self.assertEqual(
+            [book["title"] for book in books],
+            ["First Renewed Book", "Second Renewed Book"],
+        )
+
+    def test_parse_checkin_email_books_between_dashes(self):
+        message = self.make_message(
+            """  2026-09-08
+
+Crossroads Library
+425-644-6203
+
+Checkin
+
+-------------------------
+
+Everything you need to ace pre-algebra & algebra 1 in one big fat notebook : the complete high school study guide
+
+31000060537324
+
+-------------------------
+
+Everything you need to ace algebra 2 in one big fat notebook
+
+31000060535914
+
+-------------------------
+
+Number of checked in items 2
+"""
+        )
+
+        self.assertEqual(
+            parse_checkin_email(message),
+            [
+                "Everything you need to ace pre-algebra & algebra 1 in one big fat notebook : the complete high school study guide",
+                "Everything you need to ace algebra 2 in one big fat notebook",
+            ],
+        )
+
     def test_checkout_unknown_user_and_missing_due_date(self):
         message = self.make_message(
             """Dear Someone Else,
@@ -212,6 +283,19 @@ Author:
 
         self.assertEqual(search_unread_holds(mail), [])
         self.assertEqual(search_unread_receipts(mail), [])
+        self.assertEqual(search_unread_due_dates(mail), [])
+        self.assertEqual(search_unread_checkins(mail), [])
+
+    def test_checkin_search_uses_both_subject_variants(self):
+        searches = []
+        mail = SimpleNamespace(
+            search=lambda *args: (searches.append(args) or ("OK", [b"1"])))
+
+        self.assertEqual(search_unread_checkins(mail), [b"1"])
+        search_text = " ".join(str(argument) for argument in searches[0])
+        self.assertIn('FROM "No-Reply-AMH-Notify@kcls.org"', search_text)
+        self.assertIn('SUBJECT "Checkin"', search_text)
+        self.assertIn('SUBJECT "Items Returned Receipt"', search_text)
 
     def test_hold_search_includes_ready_and_expired_subjects(self):
         searches = []
