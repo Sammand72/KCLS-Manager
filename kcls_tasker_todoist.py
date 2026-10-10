@@ -1,8 +1,10 @@
 # Python3 code to take the hold details from kcls_parser.py into Todoist
 
-import os
 import logging
+import os
+
 from todoist_api_python.api import TodoistAPI
+
 from kcls_task_matching import titles_match, users_match
 
 # Every task has this in front of the book title, so it has to be removed before comparing with checkout email

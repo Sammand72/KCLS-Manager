@@ -1,9 +1,9 @@
-import json
 import imaplib
+import json
 import tempfile
 import unittest
-from email.message import EmailMessage
 from datetime import datetime
+from email.message import EmailMessage
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -11,18 +11,18 @@ from kcls_parser import (
     build_location_address_mapping,
     close_logging,
     configure_logging,
-    get_tracer_logger,
     get_location_address,
+    get_tracer_logger,
     load_location_addresses,
-    parse_checkout_receipt,
     parse_checkin_email,
+    parse_checkout_receipt,
     parse_due_date_email,
     parse_hold_email,
     record_library_event,
+    search_unread_checkins,
+    search_unread_due_dates,
     search_unread_holds,
     search_unread_receipts,
-    search_unread_due_dates,
-    search_unread_checkins,
     validate_task_manager,
 )
 
@@ -343,9 +343,11 @@ Author:
             )
         )
 
-        with patch("kcls_parser.time.sleep") as sleep:
-            with self.assertRaises(SystemExit):
-                login_to_gmail(mail, "user", "password", wait_seconds=0)
+        with (
+            patch("kcls_parser.time.sleep") as sleep,
+            self.assertRaises(SystemExit),
+        ):
+            login_to_gmail(mail, "user", "password", wait_seconds=0)
 
         self.assertEqual(sleep.call_count, 2)
 
@@ -362,9 +364,11 @@ Author:
 
         mail = SimpleNamespace(login=login)
 
-        with patch("kcls_parser.time.sleep") as sleep:
-            with self.assertRaises(SystemExit):
-                login_to_gmail(mail, "user", "password", wait_seconds=0)
+        with (
+            patch("kcls_parser.time.sleep") as sleep,
+            self.assertRaises(SystemExit),
+        ):
+            login_to_gmail(mail, "user", "password", wait_seconds=0)
 
         self.assertEqual(len(login_calls), 1)
         sleep.assert_not_called()

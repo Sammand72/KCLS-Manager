@@ -1,40 +1,41 @@
 # Scan KCLS emails and add library holds to Google Tasks or Todoist.
-from datetime import datetime
 import email
 import imaplib
 import json
 import logging
-import sys
 import os
 import re
+import sys
 import time
+from datetime import datetime
 from email import policy
+
 import dateparser
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+
 from kcls_tasker_gtasks import (
     add_due_book_to_google,
     add_hold_to_google,
     authenticate_google_tasks,
+    complete_due_book_google,
     expire_hold_google,
     get_tasklist_id,
     get_tasklist_name,
     mark_hold_complete_google,
     update_due_book_google,
-    complete_due_book_google,
 )
 from kcls_tasker_todoist import (
     add_due_book_to_todoist,
     add_hold_to_todoist,
     authenticate_todoist,
+    complete_due_book_todoist,
     expire_hold_todoist,
     get_project_id,
     get_project_name,
     mark_hold_complete_todoist,
     update_due_book_todoist,
-    complete_due_book_todoist,
 )
-
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -387,7 +388,7 @@ def connect_to_gmail(max_retries=10, wait_seconds=15):
             mail = imaplib.IMAP4_SSL('imap.gmail.com')
             get_tracer_logger().info("Connected to the mail server.")
             return mail
-        except Exception:
+        except Exception:  # noqa: BLE001
             get_tracer_logger().warning(
                 "Mail server not ready yet (Attempt %s/%s). "
                 "Waiting %s seconds...",
@@ -740,7 +741,7 @@ def process_hold_emails(
 
             mail.store(email_id, '+FLAGS', '\\Seen')
             get_tracer_logger().info("Hold email marked as read")
-        except Exception:
+        except Exception:  # noqa: BLE001
             get_tracer_logger().exception(
                 "Failed to process hold email %s", email_id)
 
@@ -809,7 +810,7 @@ def process_receipt_emails(
 
             mail.store(email_id, '+FLAGS', '\\Seen')
             get_tracer_logger().info("Checkout receipt marked as read")
-        except Exception:
+        except Exception:  # noqa: BLE001
             get_tracer_logger().exception(
                 "Failed to process checkout receipt %s", email_id)
 
@@ -844,7 +845,7 @@ def process_due_date_emails(
                     task_manager, book, task_context)
 
             mail.store(email_id, '+FLAGS', '\\Seen')
-        except Exception:
+        except Exception:  # noqa: BLE001
             get_tracer_logger().exception(
                 "Failed to process renewal email %s", email_id)
 
@@ -872,7 +873,7 @@ def process_checkin_emails(
                     task_manager, book_title, task_context)
 
             mail.store(email_id, '+FLAGS', '\\Seen')
-        except Exception:
+        except Exception:  # noqa: BLE001
             get_tracer_logger().exception(
                 "Failed to process check-in email %s", email_id)
 

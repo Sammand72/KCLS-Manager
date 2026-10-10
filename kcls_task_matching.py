@@ -1,6 +1,5 @@
 import re
 
-
 UNKNOWN_USER = "unknown user"
 
 

@@ -1,14 +1,15 @@
 # Python3 code to take the hold details from kcls_parser.py into Google Tasks API
 
-import os
+import json
 import logging
+import os
+
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-import json
-from kcls_task_matching import titles_match, users_match
 
+from kcls_task_matching import titles_match, users_match
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -113,7 +114,7 @@ def add_hold_to_google(
 
     # Push the package to KCLS Library Holds tasklist
     TRACER_LOGGER.info("Pushing '%s' to Google Tasks", book_title)
-    result = service.tasks().insert(
+    service.tasks().insert(
         tasklist=target_list_id, body=task_payload).execute()
     TRACER_LOGGER.info("Google Tasks hold created successfully")
 

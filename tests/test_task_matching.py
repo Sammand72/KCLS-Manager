@@ -4,35 +4,35 @@ from email.message import EmailMessage
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from kcls_tasker_gtasks import (
-    add_hold_to_google,
-    expire_hold_google,
-    get_tasklist_id,
-    get_tasklist_name,
-    mark_hold_complete_google,
-    complete_due_book_google,
-    update_due_book_google,
-)
-from kcls_tasker_todoist import (
-    add_hold_to_todoist,
-    expire_hold_todoist,
-    get_project_id,
-    get_project_name,
-    mark_hold_complete_todoist,
-    complete_due_book_todoist,
-    update_due_book_todoist,
-)
 from kcls_parser import (
     add_hold_to_task_manager,
+    process_checkin_emails,
+    process_due_date_emails,
     process_hold_emails,
     process_receipt_emails,
-    process_due_date_emails,
-    process_checkin_emails,
 )
 from kcls_task_matching import (
     extract_task_user,
     titles_match,
     users_match,
+)
+from kcls_tasker_gtasks import (
+    add_hold_to_google,
+    complete_due_book_google,
+    expire_hold_google,
+    get_tasklist_id,
+    get_tasklist_name,
+    mark_hold_complete_google,
+    update_due_book_google,
+)
+from kcls_tasker_todoist import (
+    add_hold_to_todoist,
+    complete_due_book_todoist,
+    expire_hold_todoist,
+    get_project_id,
+    get_project_name,
+    mark_hold_complete_todoist,
+    update_due_book_todoist,
 )
 
 
@@ -115,7 +115,7 @@ class FakeGoogleTasks:
             self.completed.append(kwargs["task"])
         else:
             self.updated.append(kwargs)
-        return SimpleNamespace(execute=lambda: {})
+        return SimpleNamespace(execute=dict)
 
     def insert(self, **kwargs):
         self.inserted = kwargs

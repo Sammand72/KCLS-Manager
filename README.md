@@ -1,5 +1,7 @@
 # KCLS Library Manager
 
+[![Tests](https://github.com/Sammand72/KCLS-Manager/actions/workflows/tests.yml/badge.svg)](https://github.com/Sammand72/KCLS-Manager/actions/workflows/tests.yml)
+
 A headless Python automation script that silently monitors an email inbox for King County Library System (KCLS) emails. It parses the email for book titles, authors, pickup locations, and deadlines, and automatically pushes them to a Task Manager.
 
 > [!NOTE]
@@ -135,4 +137,4 @@ crontab -l
 * The email parser is organized into small functions, but it still processes one email at a time and uses the existing task-manager APIs.
 * Web scraper version is planned
 
-Code was partly made with Google Gemini 3.1 Pro and Claude Code (CLAUDE.md IS STALE!!!!).
+Code was partly made with Google Gemini 3.1 Pro and Claude Code (AGENTS.md/CLAUDE.md was stale till now).
