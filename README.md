@@ -55,7 +55,9 @@ Note: On linux instead of pip you may use apt to install the underlying librarie
 ### Other files
 
 * **credentials.json**- contains Google Cloud OAuth 2.0 Client ID
-* **users.json**- contains account numbers mapped to user
+* **users.json**- optionally contains account numbers mapped to users. If it is
+  missing or invalid, the parser continues and labels unmatched accounts as
+  unknown users.
 * **.env**- contains email id and app password for the email being monitored, plus:
   * **TASK_MANAGER**- set to `google` or `todoist` to choose which task manager holds get pushed to (defaults to `google` if unset)
   * **TODOIST_API_TOKEN**- your Todoist personal API token (only needed if `TASK_MANAGER=todoist`)
@@ -73,7 +75,7 @@ This script can push holds to either Google Tasks or Todoist, but never both at 
 
 ### Google Tasks
 
-The method to get the Google Tasks API is complex and will require a guide (You can find several on YouTube). The script needs to generate the token.json so the first run has to be manual. It will open a browser window with a login page.
+The method to get the Google Tasks API is complex and will require a guide (You can find several on YouTube). The script needs to generate the token.json, so the first run has to be manual and will open a browser window with a login page. If a saved token expires and cannot be refreshed, run the script manually again before the next cron or Task Scheduler run. Unattended runs fail with a clear log message instead of trying to open or wait for a browser.
 
 ### Todoist
 

@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import sys
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -28,6 +29,23 @@ def get_tasklist_name():
     return os.getenv('GOOGLE_TASKLIST_NAME', '').strip()
 
 
+def is_interactive():
+    """Return whether browser-based OAuth can be completed in this process."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def raise_non_interactive_auth_error(cause=None):
+    """Explain how to complete Google OAuth when no browser is available."""
+    message = (
+        "Google Tasks authentication needs an interactive browser login. "
+        "Run the script manually once to create or refresh token.json before "
+        "running it from cron or Task Scheduler."
+    )
+    if cause is not None:
+        raise RuntimeError(message) from cause
+    raise RuntimeError(message)
+
+
 def authenticate_google_tasks():
     """Load saved Google credentials or complete the OAuth login flow."""
     creds = None
@@ -41,8 +59,19 @@ def authenticate_google_tasks():
     # if no valid credentials, let user log in
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as error:
+                TRACER_LOGGER.exception(
+                    "Could not refresh Google Tasks credentials.")
+                if not is_interactive():
+                    raise_non_interactive_auth_error(error)
+                creds = None
         else:
+            if not is_interactive():
+                raise_non_interactive_auth_error()
+
+        if creds is None:
             # opens browser to click "Allow"
             flow = InstalledAppFlow.from_client_secrets_file(
                 credentials_path, SCOPES)

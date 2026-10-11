@@ -5,15 +5,18 @@ import unittest
 from datetime import datetime
 from email.message import EmailMessage
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from kcls_parser import (
     build_location_address_mapping,
     close_logging,
     configure_logging,
+    create_task_manager_context,
     get_location_address,
     get_tracer_logger,
     load_location_addresses,
+    load_user_mapping,
+    main,
     parse_checkin_email,
     parse_checkout_receipt,
     parse_due_date_email,
@@ -271,6 +274,29 @@ Author:
 
         self.assertEqual(addresses, {})
 
+    def test_missing_user_file_returns_empty_mapping(self):
+        self.assertEqual(load_user_mapping("does-not-exist.json"), {})
+
+    def test_malformed_user_file_returns_empty_mapping(self):
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", encoding="utf-8") as file:
+            file.write("not valid json")
+            file.flush()
+
+            users = load_user_mapping(file.name)
+
+        self.assertEqual(users, {})
+
+    def test_user_file_must_contain_a_mapping(self):
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", encoding="utf-8") as file:
+            json.dump(["Sam"], file)
+            file.flush()
+
+            users = load_user_mapping(file.name)
+
+        self.assertEqual(users, {})
+
     def test_imap_fetch_failure_returns_no_message(self):
         mail = SimpleNamespace(fetch=lambda *args: ("NO", []))
 
@@ -376,6 +402,52 @@ Author:
     def test_invalid_task_manager_is_rejected(self):
         with self.assertRaises(ValueError):
             validate_task_manager("unsupported")
+
+    def test_google_context_resolves_tasklist(self):
+        service = object()
+
+        with (
+            patch("kcls_parser.authenticate_google_tasks", return_value=service),
+            patch("kcls_parser.get_tasklist_name", return_value="Reading"),
+            patch("kcls_parser.get_tasklist_id", return_value="list-id"),
+        ):
+            context = create_task_manager_context("google")
+
+        self.assertEqual(context, {
+            "service": service,
+            "target_list_id": "list-id",
+        })
+
+    def test_main_logs_task_manager_failure_and_closes_mail(self):
+        mail = SimpleNamespace(
+            select=Mock(),
+            logout=Mock(),
+        )
+
+        with (
+            patch.dict("os.environ", {"TASK_MANAGER": "google"}),
+            patch("kcls_parser.configure_logging"),
+            patch("kcls_parser.close_logging") as close_logging_mock,
+            patch("kcls_parser.connect_to_gmail", return_value=mail),
+            patch("kcls_parser.login_to_gmail"),
+            patch("kcls_parser.search_unread_holds", return_value=[b"1"]),
+            patch("kcls_parser.search_unread_receipts", return_value=[]),
+            patch("kcls_parser.search_unread_due_dates", return_value=[]),
+            patch("kcls_parser.search_unread_checkins", return_value=[]),
+            patch("kcls_parser.load_user_mapping", return_value={}) as user_loader,
+            patch("kcls_parser.load_location_addresses", return_value={}),
+            patch(
+                "kcls_parser.create_task_manager_context",
+                side_effect=RuntimeError("expired token"),
+            ),
+            patch("kcls_parser.get_tracer_logger") as logger_mock,
+        ):
+            main()
+
+        mail.logout.assert_called_once()
+        close_logging_mock.assert_called_once()
+        user_loader.assert_called_once()
+        logger_mock.return_value.exception.assert_called_once()
 
     def test_library_records_use_json_lines_and_separate_tracer_output(self):
         with tempfile.TemporaryDirectory() as log_directory:

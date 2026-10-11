@@ -140,6 +140,26 @@ def load_location_addresses(file_path):
         return {}
 
 
+def load_user_mapping(file_path):
+    """Load account users, continuing with unknown users if it is invalid."""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            user_mapping = json.load(file)
+
+        if not isinstance(user_mapping, dict):
+            raise TypeError("expected a JSON object")
+
+        return user_mapping
+    except (OSError, ValueError, TypeError) as error:
+        get_tracer_logger().warning(
+            "Could not load user mapping from %s: %s. "
+            "Continuing with unknown users.",
+            file_path,
+            error,
+        )
+        return {}
+
+
 def get_location_address(location_name, location_addresses):
     """Return a branch address, or an empty string when it is not listed."""
     return location_addresses.get(normalize_location_name(location_name), "")
@@ -896,8 +916,7 @@ def main():
     get_tracer_logger().info("Selected Task Manager: %s", task_manager)
     validate_task_manager(task_manager)
 
-    with open(json_path, 'r') as file:
-        user_mapping = json.load(file)
+    user_mapping = load_user_mapping(json_path)
     location_addresses = load_location_addresses(locations_path)
 
     mail = connect_to_gmail()
@@ -911,7 +930,15 @@ def main():
         task_context = None
         if (hold_email_ids or receipt_email_ids or due_date_email_ids or
                 checkin_email_ids):
-            task_context = create_task_manager_context(task_manager)
+            try:
+                task_context = create_task_manager_context(task_manager)
+            except Exception:  # noqa: BLE001
+                get_tracer_logger().exception(
+                    "Could not initialize the %s task manager. "
+                    "No emails were processed.",
+                    task_manager,
+                )
+                return
         process_hold_emails(
             mail,
             hold_email_ids,
