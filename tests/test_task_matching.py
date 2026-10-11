@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import UTC, date, datetime
 from email.message import EmailMessage
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,11 +14,16 @@ from kcls_parser import (
     process_receipt_emails,
 )
 from kcls_task_matching import (
+    TASK_TITLE_PREFIX,
+    build_hold_notes,
     extract_task_user,
+    is_same_task,
+    strip_task_prefix,
     titles_match,
     users_match,
 )
 from kcls_tasker_gtasks import (
+    add_due_book_to_google,
     add_hold_to_google,
     authenticate_google_tasks,
     complete_due_book_google,
@@ -28,6 +34,7 @@ from kcls_tasker_gtasks import (
     update_due_book_google,
 )
 from kcls_tasker_todoist import (
+    add_due_book_to_todoist,
     add_hold_to_todoist,
     complete_due_book_todoist,
     expire_hold_todoist,
@@ -90,6 +97,40 @@ class MatcherTests(unittest.TestCase):
         self.assertFalse(users_match("Sam", "Account: Alex"))
         self.assertFalse(users_match("Sam", "Author: Someone"))
         self.assertFalse(users_match("Unknown user", "Account: Alex"))
+
+    def test_strip_task_prefix_returns_book_title_or_none(self):
+        self.assertEqual(
+            strip_task_prefix("KCLS book pickup: A Book", TASK_TITLE_PREFIX),
+            "A Book")
+        self.assertEqual(
+            strip_task_prefix("  kcls BOOK pickup: A Book ", TASK_TITLE_PREFIX),
+            "A Book")
+        self.assertIsNone(
+            strip_task_prefix("Buy milk", TASK_TITLE_PREFIX))
+        # Expired pickups have their own prefix and must not count as pickups.
+        self.assertIsNone(strip_task_prefix(
+            "EXPIRED KCLS book pickup: A Book", TASK_TITLE_PREFIX))
+
+    def test_hold_notes_account_line_can_be_read_back(self):
+        notes = build_hold_notes(
+            author="An Author", location="Auburn",
+            address="1102 Auburn Way S", account_user="Sam")
+        self.assertEqual(extract_task_user(notes), "Sam")
+        self.assertIn("Address: 1102 Auburn Way S", notes)
+        self.assertNotIn(
+            "Address:", build_hold_notes("A", "Auburn", "", "Sam"))
+
+    def test_same_task_needs_exact_title_and_same_user(self):
+        self.assertTrue(is_same_task(
+            "A Book!", "Author: X\nAccount: Sam", "a book", "sam"))
+        self.assertTrue(is_same_task(
+            "A Book", "Account: Unknown user", "A Book", "Unknown user"))
+        self.assertFalse(is_same_task(
+            "A Book", "Account: Alex", "A Book", "Sam"))
+        # A truncated title is a different task for duplicate checks.
+        self.assertFalse(is_same_task(
+            "Everything you need to ace", "Account: Sam",
+            "Everything you need to ace algebra", "Sam"))
 
 
 class FakeGoogleTasks:
@@ -158,6 +199,7 @@ class TaskMatchingBackendTests(unittest.TestCase):
         added_tasks = []
         api = SimpleNamespace(
             add_task=lambda **kwargs: added_tasks.append(kwargs),
+            get_tasks=lambda project_id: [[]],
         )
 
         with patch.dict(os.environ, {"TODOIST_PROJECT_NAME": "Reading List"}), \
@@ -184,6 +226,99 @@ class TaskMatchingBackendTests(unittest.TestCase):
         self.assertIn("Address: 1102 Auburn Way S, Auburn, WA 98002", notes)
         self.assertIn("Account: Sam", notes)
 
+    def test_google_hold_is_not_added_twice(self):
+        service = FakeGoogleService([{
+            "id": "sam-hold",
+            "title": "KCLS book pickup: A Book",
+            "notes": "Author: An Author\nAccount: Sam",
+        }])
+        service.task_api.inserted = None
+
+        add_hold_to_google(
+            "A Book", "An Author", "Auburn", "Sam", None,
+            service=service, target_list_id="list",
+        )
+
+        self.assertIsNone(service.task_api.inserted)
+
+    def test_google_hold_for_another_user_is_still_added(self):
+        service = FakeGoogleService([{
+            "id": "alex-hold",
+            "title": "KCLS book pickup: A Book",
+            "notes": "Account: Alex",
+        }])
+        service.task_api.inserted = None
+
+        add_hold_to_google(
+            "A Book", "An Author", "Auburn", "Sam", None,
+            service=service, target_list_id="list",
+        )
+
+        self.assertIsNotNone(service.task_api.inserted)
+
+    def test_google_existing_due_task_gets_new_date_not_duplicate(self):
+        service = FakeGoogleService([{
+            "id": "sam-due",
+            "title": "KCLS book due: A Book",
+            "notes": "Author: An Author\nAccount: Sam",
+        }])
+        service.task_api.inserted = None
+        due = datetime(2026, 11, 3, tzinfo=UTC)
+
+        add_due_book_to_google(
+            "A Book", "An Author", "Sam", due,
+            service=service, target_list_id="list",
+        )
+
+        self.assertIsNone(service.task_api.inserted)
+        self.assertEqual(service.task_api.updated[0]["task"], "sam-due")
+        self.assertEqual(
+            service.task_api.updated[0]["body"]["due"], due.isoformat())
+
+    def test_todoist_hold_is_not_added_twice(self):
+        added_tasks = []
+        task = SimpleNamespace(
+            id="sam-hold",
+            content="KCLS book pickup: A Book",
+            description="Author: An Author\nAccount: Sam",
+        )
+        api = SimpleNamespace(
+            add_task=lambda **kwargs: added_tasks.append(kwargs),
+            get_tasks=lambda project_id: [[task]],
+        )
+
+        add_hold_to_todoist(
+            "A Book", "An Author", "Auburn", "Sam", None,
+            api=api, target_project_id="project",
+        )
+
+        self.assertEqual(added_tasks, [])
+
+    def test_todoist_existing_due_task_gets_new_date_not_duplicate(self):
+        added_tasks = []
+        updated_tasks = []
+        task = SimpleNamespace(
+            id="sam-due",
+            content="KCLS book due: A Book",
+            description="Author: An Author\nAccount: Sam",
+        )
+        api = SimpleNamespace(
+            add_task=lambda **kwargs: added_tasks.append(kwargs),
+            get_tasks=lambda project_id: [[task]],
+            update_task=lambda *args, **kwargs: updated_tasks.append(
+                (args, kwargs)),
+        )
+
+        add_due_book_to_todoist(
+            "A Book", "An Author", "Sam",
+            datetime(2026, 11, 3, tzinfo=UTC),
+            api=api, target_project_id="project",
+        )
+
+        self.assertEqual(added_tasks, [])
+        self.assertEqual(
+            updated_tasks, [(("sam-due",), {"due_date": date(2026, 11, 3)})])
+
     def test_google_expired_hold_renames_matching_account_task(self):
         service = FakeGoogleService([{
             "id": "sam-hold",
@@ -203,6 +338,7 @@ class TaskMatchingBackendTests(unittest.TestCase):
         added_tasks = []
         api = SimpleNamespace(
             add_task=lambda **kwargs: added_tasks.append(kwargs),
+            get_tasks=lambda project_id: [[]],
         )
 
         add_hold_to_todoist(

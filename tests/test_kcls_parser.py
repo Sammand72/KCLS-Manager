@@ -24,6 +24,7 @@ from kcls_parser import (
     record_library_event,
     search_unread_checkins,
     search_unread_due_dates,
+    search_unread_emails,
     search_unread_holds,
     search_unread_receipts,
     validate_task_manager,
@@ -304,6 +305,20 @@ Author:
 
         self.assertIsNone(fetch_message(mail, b"1"))
 
+    def test_imap_fetch_peeks_so_email_stays_unread(self):
+        fetch_calls = []
+
+        def fake_fetch(*args):
+            fetch_calls.append(args)
+            return ("OK", [(b"1 (BODY[] {0}", b"Subject: Hi\r\n\r\nBody")])
+
+        from kcls_parser import fetch_message
+
+        message = fetch_message(SimpleNamespace(fetch=fake_fetch), b"1")
+
+        self.assertEqual(fetch_calls, [(b"1", "(BODY.PEEK[])")])
+        self.assertEqual(message["subject"], "Hi")
+
     def test_imap_search_failure_returns_no_email_ids(self):
         mail = SimpleNamespace(search=lambda *args: ("NO", [b"1 2"]))
 
@@ -311,6 +326,25 @@ Author:
         self.assertEqual(search_unread_receipts(mail), [])
         self.assertEqual(search_unread_due_dates(mail), [])
         self.assertEqual(search_unread_checkins(mail), [])
+
+    def test_search_unread_emails_builds_imap_criteria(self):
+        searches = []
+        mail = SimpleNamespace(
+            search=lambda *args: (searches.append(args) or ("OK", [b"4 9"])))
+
+        email_ids = search_unread_emails(
+            mail,
+            from_address="noreply@kcls.org",
+            subject_query='(SUBJECT "Due Dates")',
+            email_kind="renewal",
+        )
+
+        self.assertEqual(email_ids, [b"4", b"9"])
+        self.assertEqual(
+            searches[0],
+            (None, '(FROM "noreply@kcls.org")', 'UNSEEN',
+             '(SUBJECT "Due Dates")'),
+        )
 
     def test_checkin_search_uses_both_subject_variants(self):
         searches = []

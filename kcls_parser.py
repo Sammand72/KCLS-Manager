@@ -203,7 +203,11 @@ def get_message_text(message):
 
 def fetch_message(mail, email_id):
     """Fetch complete email from IMAP Gmail and turn it into a message object."""
-    status, data = mail.fetch(email_id, '(RFC822)')
+    # BODY.PEEK[] downloads the whole email without changing its flags.
+    # Plain RFC822 (or BODY[]) would make Gmail mark it read right away,
+    # so an email that fails halfway would never be retried.
+    # We mark it read ourselves with mail.store() once it is fully handled.
+    status, data = mail.fetch(email_id, '(BODY.PEEK[])')
     if status != 'OK':
         get_tracer_logger().error(
             "Could not fetch email %s from IMAP Gmail (status: %s)",
@@ -214,6 +218,20 @@ def fetch_message(mail, email_id):
 
     raw_email_bytes = data[0][1]
     return email.message_from_bytes(raw_email_bytes, policy=policy.default)
+
+
+def parse_kcls_date(date_text):
+    """Turn a KCLS date like "October 15, 2026" into a timezone-aware datetime.
+
+    KCLS dates are in Seattle local time. Returns None if the text isn't a date.
+    """
+    return dateparser.parse(
+        date_text,
+        settings={
+            'TIMEZONE': 'America/Los_Angeles',
+            'RETURN_AS_TIMEZONE_AWARE': True,
+        },
+    )
 
 
 def parse_hold_email(message, user_mapping):
@@ -251,13 +269,7 @@ def parse_hold_email(message, user_mapping):
 
         elif current_line == "Pickup by" and "title" in current_hold:
             deadline_text = value_after(lines, index)
-            current_hold["deadline"] = dateparser.parse(
-                deadline_text,
-                settings={
-                    'TIMEZONE': 'America/Los_Angeles',
-                    'RETURN_AS_TIMEZONE_AWARE': True,
-                },
-            )
+            current_hold["deadline"] = parse_kcls_date(deadline_text)
             current_hold["str_deadline"] = deadline_text
 
     if "title" in current_hold:
@@ -310,13 +322,7 @@ def parse_checkout_receipt(message, user_mapping):
 
         elif "Due Date:" in current_line and "title" in current_book:
             due_date_text = current_line.split("Due Date:", 1)[1].strip()
-            current_book["due_date"] = dateparser.parse(
-                due_date_text,
-                settings={
-                    'TIMEZONE': 'US/Pacific',
-                    'RETURN_AS_TIMEZONE_AWARE': True,
-                },
-            )
+            current_book["due_date"] = parse_kcls_date(due_date_text)
 
     if "title" in current_book:
         checked_out_books.append(current_book)
@@ -348,13 +354,7 @@ def parse_due_date_email(message, user_mapping):
             user = user_mapping.get(account_number, "Unknown user")
         elif current_line in ("Due Date", "Date Due") and "title" in current_book:
             due_date_text = value_after(lines, index)
-            current_book["due_date"] = dateparser.parse(
-                due_date_text,
-                settings={
-                    'TIMEZONE': 'America/Los_Angeles',
-                    'RETURN_AS_TIMEZONE_AWARE': True,
-                },
-            )
+            current_book["due_date"] = parse_kcls_date(due_date_text)
 
     if "title" in current_book:
         renewed_books.append(current_book)
@@ -467,80 +467,71 @@ def login_to_gmail(mail, username, password, max_attempts=3, wait_seconds=15):
             time.sleep(wait_seconds)
 
 
-def search_unread_holds(mail):
-    """Find unread KCLS emails about ready or expired holds."""
+def search_unread_emails(mail, from_address, subject_query, email_kind):
+    """Find unread emails from one sender whose subject matches the query.
+
+    email_kind is only used in the log message, e.g. "hold" or "check-in".
+    Returns a list of IMAP email IDs, or an empty list if the search failed.
+    """
     status, messages = mail.search(
         None,
-        '(FROM "noreply@kcls.org")',
+        f'(FROM "{from_address}")',
         'UNSEEN',
-        '(OR (OR (SUBJECT "Hold is Ready") (SUBJECT "Holds are Ready")) '
-        '(OR (SUBJECT "Hold Has Expired") (SUBJECT "Holds have expired")))',
+        subject_query,
     )
     if status != 'OK' or not messages:
         get_tracer_logger().error(
-            "Could not search for unread hold emails in IMAP Gmail (status: %s)",
+            "Could not search for unread %s emails in IMAP Gmail (status: %s)",
+            email_kind,
             status,
         )
         return []
 
+    # IMAP returns one string of space-separated IDs, like b"3 7 12".
     return messages[0].split()
+
+
+def search_unread_holds(mail):
+    """Find unread KCLS emails about ready or expired holds."""
+    return search_unread_emails(
+        mail,
+        from_address="noreply@kcls.org",
+        subject_query=(
+            '(OR (OR (SUBJECT "Hold is Ready") (SUBJECT "Holds are Ready")) '
+            '(OR (SUBJECT "Hold Has Expired") (SUBJECT "Holds have expired")))'
+        ),
+        email_kind="hold",
+    )
 
 
 def search_unread_receipts(mail):
     """Find unread KCLS checkout receipt emails."""
-    status, messages = mail.search(
-        None,
-        '(FROM "noreply@kcls.org")',
-        'UNSEEN',
-        '(SUBJECT "Checkout Receipt")',
+    return search_unread_emails(
+        mail,
+        from_address="noreply@kcls.org",
+        subject_query='(SUBJECT "Checkout Receipt")',
+        email_kind="checkout receipt",
     )
-    if status != 'OK' or not messages:
-        get_tracer_logger().error(
-            "Could not search for unread checkout receipts in IMAP Gmail "
-            "(status: %s)",
-            status,
-        )
-        return []
-
-    return messages[0].split()
 
 
 def search_unread_due_dates(mail):
     """Find unread KCLS emails containing renewed book due dates."""
-    status, messages = mail.search(
-        None,
-        '(FROM "noreply@kcls.org")',
-        'UNSEEN',
-        '(SUBJECT "Due Dates")',
+    return search_unread_emails(
+        mail,
+        from_address="noreply@kcls.org",
+        subject_query='(SUBJECT "Due Dates")',
+        email_kind="renewal",
     )
-    if status != 'OK' or not messages:
-        get_tracer_logger().error(
-            "Could not search for unread renewal emails in IMAP Gmail "
-            "(status: %s)",
-            status,
-        )
-        return []
-
-    return messages[0].split()
 
 
 def search_unread_checkins(mail):
     """Find unread KCLS emails about returned books."""
-    status, messages = mail.search(
-        None,
-        '(FROM "No-Reply-AMH-Notify@kcls.org")',
-        'UNSEEN',
-        '(OR (SUBJECT "Checkin") (SUBJECT "Items Returned Receipt"))',
+    return search_unread_emails(
+        mail,
+        from_address="No-Reply-AMH-Notify@kcls.org",
+        subject_query='(OR (SUBJECT "Checkin") (SUBJECT "Items Returned Receipt"))',
+        email_kind="check-in",
     )
-    if status != 'OK' or not messages:
-        get_tracer_logger().error(
-            "Could not search for unread check-in emails in IMAP Gmail "
-            "(status: %s)",
-            status,
-        )
-        return []
-
-    return messages[0].split()
 
 
 def validate_task_manager(task_manager):
@@ -569,110 +560,92 @@ def create_task_manager_context(task_manager):
     }
 
 
+def add_task_context(task_arguments, task_context):
+    """Add the shared login/list details (if any) to a task call's arguments."""
+    if task_context is not None:
+        task_arguments.update(task_context)
+    return task_arguments
+
+
 def add_hold_to_task_manager(
         task_manager, hold, task_context=None, location_address=""):
     """Send one hold to the task manager selected in the environment."""
     validate_task_manager(task_manager)
 
     if hold.get('expired', False):
-        expire_arguments = {
+        expire_arguments = add_task_context({
             'book_title': hold['title'],
             'account_user': hold['user'],
-        }
-        if task_context is not None:
-            expire_arguments.update(task_context)
-        if task_manager == 'todoist':
-            expire_hold_todoist(**expire_arguments)
-        else:
-            expire_hold_google(**expire_arguments)
+        }, task_context)
+        # Pick the right function first, then call it once with the arguments.
+        expire_fn = (
+            expire_hold_todoist if task_manager == 'todoist'
+            else expire_hold_google
+        )
+        expire_fn(**expire_arguments)
         return
 
-    if task_manager == 'todoist':
-        task_arguments = {
-            'book_title': hold['title'],
-            'author': hold['author'],
-            'location': hold['location'],
-            'account_user': hold['user'],
-            'deadline_datetime': hold['deadline'],
-            'address': location_address,
-        }
-        if task_context is not None:
-            task_arguments.update(task_context)
-        add_hold_to_todoist(**task_arguments)
-    else:
-        task_arguments = {
-            'book_title': hold['title'],
-            'author': hold['author'],
-            'location': hold['location'],
-            'account_user': hold['user'],
-            'deadline_datetime': hold['deadline'],
-            'address': location_address,
-        }
-        if task_context is not None:
-            task_arguments.update(task_context)
-        add_hold_to_google(**task_arguments)
+    task_arguments = add_task_context({
+        'book_title': hold['title'],
+        'author': hold['author'],
+        'location': hold['location'],
+        'account_user': hold['user'],
+        'deadline_datetime': hold['deadline'],
+        'address': location_address,
+    }, task_context)
+    add_fn = (
+        add_hold_to_todoist if task_manager == 'todoist'
+        else add_hold_to_google
+    )
+    add_fn(**task_arguments)
 
 
 def complete_hold_in_task_manager(task_manager, book, task_context=None):
     """Mark one checked-out book complete in the selected task manager."""
     validate_task_manager(task_manager)
 
-    if task_manager == 'todoist':
-        task_arguments = {
-            'book_title': book['title'], 'checkout_user': book['user']}
-        if task_context is not None:
-            task_arguments.update(task_context)
-        mark_hold_complete_todoist(**task_arguments)
-    else:
-        task_arguments = {
-            'book_title': book['title'], 'checkout_user': book['user']}
-        if task_context is not None:
-            task_arguments.update(task_context)
-        mark_hold_complete_google(**task_arguments)
+    task_arguments = add_task_context({
+        'book_title': book['title'],
+        'checkout_user': book['user'],
+    }, task_context)
+    complete_fn = (
+        mark_hold_complete_todoist if task_manager == 'todoist'
+        else mark_hold_complete_google
+    )
+    complete_fn(**task_arguments)
 
 
 def add_due_book_to_task_manager(task_manager, book, task_context=None):
     """Add one checked-out book as a due-date task."""
     validate_task_manager(task_manager)
 
-    if task_manager == 'todoist':
-        task_arguments = {
-            'book_title': book['title'],
-            'author': book['author'],
-            'account_user': book['user'],
-            'due_datetime': book['due_date'],
-        }
-        if task_context is not None:
-            task_arguments.update(task_context)
-        add_due_book_to_todoist(**task_arguments)
-    else:
-        task_arguments = {
-            'book_title': book['title'],
-            'author': book['author'],
-            'account_user': book['user'],
-            'due_datetime': book['due_date'],
-        }
-        if task_context is not None:
-            task_arguments.update(task_context)
-        add_due_book_to_google(**task_arguments)
+    task_arguments = add_task_context({
+        'book_title': book['title'],
+        'author': book['author'],
+        'account_user': book['user'],
+        'due_datetime': book['due_date'],
+    }, task_context)
+    add_fn = (
+        add_due_book_to_todoist if task_manager == 'todoist'
+        else add_due_book_to_google
+    )
+    add_fn(**task_arguments)
 
 
 def update_due_book_in_task_manager(task_manager, book, task_context=None):
     """Update one existing due-date task with a renewed due date."""
     validate_task_manager(task_manager)
 
-    task_arguments = {
+    task_arguments = add_task_context({
         'book_title': book['title'],
         'account_user': book['user'],
         'due_datetime': book['due_date'],
-    }
-    if task_context is not None:
-        task_arguments.update(task_context)
-
-    if task_manager == 'todoist':
-        update_due_book_todoist(**task_arguments)
-    else:
-        update_due_book_google(**task_arguments)
+    }, task_context)
+    update_fn = (
+        update_due_book_todoist if task_manager == 'todoist'
+        else update_due_book_google
+    )
+    update_fn(**task_arguments)
 
 
 def complete_due_book_in_task_manager(
@@ -680,14 +653,13 @@ def complete_due_book_in_task_manager(
     """Mark one existing due-date task complete after a book is returned."""
     validate_task_manager(task_manager)
 
-    task_arguments = {'book_title': book_title}
-    if task_context is not None:
-        task_arguments.update(task_context)
-
-    if task_manager == 'todoist':
-        complete_due_book_todoist(**task_arguments)
-    else:
-        complete_due_book_google(**task_arguments)
+    task_arguments = add_task_context(
+        {'book_title': book_title}, task_context)
+    complete_fn = (
+        complete_due_book_todoist if task_manager == 'todoist'
+        else complete_due_book_google
+    )
+    complete_fn(**task_arguments)
 
 
 def process_hold_emails(
@@ -849,6 +821,12 @@ def process_due_date_emails(
                 continue
 
             renewed_books = parse_due_date_email(message, user_mapping)
+            if not renewed_books:
+                get_tracer_logger().warning(
+                    "No renewed books could be parsed from email: %s; "
+                    "marking it as read to prevent repeated retries",
+                    message['subject'],
+                )
             for book in renewed_books:
                 if not book['title'].strip() or book['due_date'] is None:
                     continue
@@ -884,6 +862,12 @@ def process_checkin_emails(
                 continue
 
             returned_books = parse_checkin_email(message)
+            if not returned_books:
+                get_tracer_logger().warning(
+                    "No returned books could be parsed from email: %s; "
+                    "marking it as read to prevent repeated retries",
+                    message['subject'],
+                )
             for book_title in returned_books:
                 record_library_event(
                     "checkin",
