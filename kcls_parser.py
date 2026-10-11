@@ -9,6 +9,7 @@ import sys
 import time
 from datetime import datetime
 from email import policy
+from email.utils import getaddresses
 
 import dateparser
 from bs4 import BeautifulSoup
@@ -160,6 +161,54 @@ def load_user_mapping(file_path):
         return {}
 
 
+def get_recipient_email(message, user_mapping):
+    """Return the email address a KCLS email was originally sent to.
+
+    Gmail's automatic forwarding keeps the original To: header, so in a
+    shared inbox this is still the family member's own address.
+    """
+    # getaddresses turns 'Sam <SAM@example.com>, b@x.com' into
+    # [('Sam', 'SAM@example.com'), ('', 'b@x.com')].
+    addresses = [
+        address.strip().lower()
+        for _, address in getaddresses(message.get_all('To', []))
+        if address.strip()
+    ]
+
+    # Prefer an address listed in users.json, in case there are several.
+    for address in addresses:
+        if address in user_mapping:
+            return address
+
+    return addresses[0] if addresses else ""
+
+
+def resolve_user(message, user_mapping, account_number="", greeting_name=""):
+    """Work out which family member an email belongs to.
+
+    The most specific clue wins. A card number or greeting name is only
+    needed when family members share one email address; otherwise the
+    recipient email address is enough.
+    """
+    # 1. A card number from the email body (holds and renewals).
+    if account_number and user_mapping.get(account_number):
+        return user_mapping[account_number]
+
+    # 2. The name in a "Dear NAME," greeting (checkout receipts).
+    if greeting_name:
+        for mapped_user in user_mapping.values():
+            if mapped_user and mapped_user.lower() == greeting_name.lower():
+                return mapped_user
+
+    # 3. The address the email was sent to. A blank name in users.json
+    #    means "just use the email address as the label".
+    recipient_email = get_recipient_email(message, user_mapping)
+    if recipient_email:
+        return user_mapping.get(recipient_email) or recipient_email
+
+    return "Unknown user"
+
+
 def get_location_address(location_name, location_addresses):
     """Return a branch address, or an empty string when it is not listed."""
     return location_addresses.get(normalize_location_name(location_name), "")
@@ -240,7 +289,7 @@ def parse_hold_email(message, user_mapping):
     holds = []
     current_hold = {}
     account_number = ""
-    user = "Unknown user"
+    user = resolve_user(message, user_mapping)
 
     for index, current_line in enumerate(lines):
         if current_line == "Title":
@@ -259,7 +308,7 @@ def parse_hold_email(message, user_mapping):
 
         elif current_line == "Account:":
             account_number = value_after(lines, index)
-            user = user_mapping.get(account_number, "Unknown user")
+            user = resolve_user(message, user_mapping, account_number)
 
         elif current_line == "Author" and "title" in current_hold:
             current_hold["author"] = value_after(lines, index) or "Unknown"
@@ -283,23 +332,17 @@ def parse_checkout_receipt(message, user_mapping):
     lines = get_message_text(message).splitlines()
     checked_out_books = []
     current_book = {}
-    user = "Unknown user"
+    greeting_name = ""
 
     for current_line in lines:
         current_line = current_line.strip()
         greeting_match = re.match(
             r"Dear\s+(.+),$", current_line, re.IGNORECASE)
         if greeting_match:
-            receipt_name = greeting_match.group(1).strip()
-            user = next(
-                (
-                    mapped_user
-                    for mapped_user in user_mapping.values()
-                    if mapped_user.lower() == receipt_name.lower()
-                ),
-                "Unknown user",
-            )
+            greeting_name = greeting_match.group(1).strip()
             break
+
+    user = resolve_user(message, user_mapping, greeting_name=greeting_name)
 
     for current_line in lines:
         current_line = current_line.strip()
@@ -336,7 +379,7 @@ def parse_due_date_email(message, user_mapping):
     renewed_books = []
     current_book = {}
     account_number = ""
-    user = "Unknown user"
+    user = resolve_user(message, user_mapping)
 
     for index, current_line in enumerate(lines):
         if current_line == "Title":
@@ -351,7 +394,7 @@ def parse_due_date_email(message, user_mapping):
             }
         elif current_line == "Account:":
             account_number = value_after(lines, index)
-            user = user_mapping.get(account_number, "Unknown user")
+            user = resolve_user(message, user_mapping, account_number)
         elif current_line in ("Due Date", "Date Due") and "title" in current_book:
             due_date_text = value_after(lines, index)
             current_book["due_date"] = parse_kcls_date(due_date_text)
@@ -649,12 +692,15 @@ def update_due_book_in_task_manager(task_manager, book, task_context=None):
 
 
 def complete_due_book_in_task_manager(
-        task_manager, book_title, task_context=None):
+        task_manager, book_title, task_context=None,
+        account_user="Unknown user"):
     """Mark one existing due-date task complete after a book is returned."""
     validate_task_manager(task_manager)
 
-    task_arguments = add_task_context(
-        {'book_title': book_title}, task_context)
+    task_arguments = add_task_context({
+        'book_title': book_title,
+        'account_user': account_user,
+    }, task_context)
     complete_fn = (
         complete_due_book_todoist if task_manager == 'todoist'
         else complete_due_book_google
@@ -849,7 +895,7 @@ def process_due_date_emails(
 
 
 def process_checkin_emails(
-        mail, email_ids, task_manager, task_context=None):
+        mail, email_ids, user_mapping, task_manager, task_context=None):
     """Parse returned books and complete their existing due-date tasks."""
     if not email_ids:
         get_tracer_logger().info("No unread KCLS check-in emails found!")
@@ -862,6 +908,9 @@ def process_checkin_emails(
                 continue
 
             returned_books = parse_checkin_email(message)
+            # Check-in emails never name the account, so the recipient
+            # email address is the only clue to who returned the books.
+            user = resolve_user(message, user_mapping)
             if not returned_books:
                 get_tracer_logger().warning(
                     "No returned books could be parsed from email: %s; "
@@ -871,10 +920,10 @@ def process_checkin_emails(
             for book_title in returned_books:
                 record_library_event(
                     "checkin",
-                    {"title": book_title},
+                    {"title": book_title, "user": user},
                 )
                 complete_due_book_in_task_manager(
-                    task_manager, book_title, task_context)
+                    task_manager, book_title, task_context, user)
 
             mail.store(email_id, '+FLAGS', '\\Seen')
         except Exception:  # noqa: BLE001
@@ -968,6 +1017,7 @@ def main():
         process_checkin_emails(
             mail,
             checkin_email_ids,
+            user_mapping,
             task_manager,
             task_context,
         )

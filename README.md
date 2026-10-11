@@ -16,7 +16,7 @@ A headless Python automation script that silently monitors an email inbox for Ki
 * Creates due-date tasks for all books on a checkout receipt, including books that were not holds
 * Auto-completes hold tasks when the corresponding book shows up on a checkout receipt
 * Auto-updates due tasks when renewal emails show up, and completes the task when there is a check-in email
-* Matches checkout receipt names to the names in `users.json`
+* Attributes every email to a family member by the address it was sent to, so several family members can auto-forward their KCLS emails into one inbox
 * Designed to run on startup via Windows Task Scheduler/Linux Cron with separate library records and operational logs.
 
 ## Logs
@@ -55,9 +55,21 @@ Note: On linux instead of pip you may use apt to install the underlying librarie
 ### Other files
 
 * **credentials.json**- contains Google Cloud OAuth 2.0 Client ID
-* **users.json**- optionally contains account numbers mapped to users. If it is
-  missing or invalid, the parser continues and labels unmatched accounts as
-  unknown users.
+* **users.json**- optional; copy [users.example.json](users.example.json) to
+  `users.json` and fill in multiple email receivers' details. Each KCLS email is attributed
+  to the address it was originally sent to (its `To:` header):
+  * Map each email address to a name. A blank name (`""`) means the email
+    address itself is used as the label.
+  * Library card numbers are only needed when several receivers share one
+    email address. A matching card number (holds and renewals) or "Dear NAME,"
+    greeting (checkout receipts) overrides the shared address.
+  * If the file is missing or invalid, emails are labelled by their recipient
+    address, or as unknown users.
+
+  To monitor several people from one inbox, set up **automatic** forwarding
+  (a Gmail forwarding address or filter) from each person's inbox. A manual
+  "Forward" changes the sender, so the parser's `noreply@kcls.org` searches
+  won't find it.
 * **.env**- contains email id and app password for the email being monitored, plus:
   * **TASK_MANAGER**- set to `google` or `todoist` to choose which task manager holds get pushed to (defaults to `google` if unset)
   * **TODOIST_API_TOKEN**- your Todoist personal API token (only needed if `TASK_MANAGER=todoist`)

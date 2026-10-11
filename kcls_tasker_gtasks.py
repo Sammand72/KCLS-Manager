@@ -364,10 +364,17 @@ def mark_hold_complete_google(
 
 
 def complete_due_book_google(
-        book_title, service=None, target_list_id=None):
-    """Find a matching open due-date task and mark it complete."""
+        book_title, account_user="Unknown user", service=None,
+        target_list_id=None):
+    """Find a matching open due-date task and mark it complete.
+
+    A task for the same account user is preferred, but any task with a
+    matching title is used as a fallback, because a shared email address
+    can't always tell family members apart.
+    """
     service, target_list_id = resolve_google_target(service, target_list_id)
 
+    title_matches = []
     for task in iter_open_google_tasks(service, target_list_id):
         task_title = strip_task_prefix(task['title'], DUE_TASK_TITLE_PREFIX)
         if task_title is None:
@@ -376,15 +383,29 @@ def complete_due_book_google(
         if titles_match(
                 checkout_title=task_title,
                 hold_title=book_title):
-            service.tasks().patch(
-                tasklist=target_list_id,
-                task=task['id'],
-                body={'status': 'completed'},
-            ).execute()
-            TRACER_LOGGER.info(
-                "Marked returned book '%s' complete in Google Tasks",
-                task['title'])
-            return
+            title_matches.append(task)
+
+    # next() returns the first task for this user, or None if there isn't one.
+    task_to_complete = next(
+        (
+            task for task in title_matches
+            if users_match(account_user, task.get('notes', ''))
+        ),
+        None,
+    )
+    if task_to_complete is None and title_matches:
+        task_to_complete = title_matches[0]
+
+    if task_to_complete is not None:
+        service.tasks().patch(
+            tasklist=target_list_id,
+            task=task_to_complete['id'],
+            body={'status': 'completed'},
+        ).execute()
+        TRACER_LOGGER.info(
+            "Marked returned book '%s' complete in Google Tasks",
+            task_to_complete['title'])
+        return
 
     TRACER_LOGGER.info(
         "No matching Google Tasks due task found for returned book '%s'",

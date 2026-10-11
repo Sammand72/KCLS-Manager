@@ -262,10 +262,17 @@ def mark_hold_complete_todoist(
 
 
 def complete_due_book_todoist(
-        book_title, api=None, target_project_id=None):
-    """Find a matching open due-date task and mark it complete."""
+        book_title, account_user="Unknown user", api=None,
+        target_project_id=None):
+    """Find a matching open due-date task and mark it complete.
+
+    A task for the same account user is preferred, but any task with a
+    matching title is used as a fallback, because a shared email address
+    can't always tell family members apart.
+    """
     api, target_project_id = resolve_todoist_target(api, target_project_id)
 
+    title_matches = []
     for task in iter_open_todoist_tasks(api, target_project_id):
         task_title = strip_task_prefix(task.content, DUE_TASK_TITLE_PREFIX)
         if task_title is None:
@@ -274,11 +281,25 @@ def complete_due_book_todoist(
         if titles_match(
                 checkout_title=task_title,
                 hold_title=book_title):
-            api.complete_task(task.id)
-            TRACER_LOGGER.info(
-                "Marked returned book '%s' complete in Todoist",
-                task.content)
-            return
+            title_matches.append(task)
+
+    # next() returns the first task for this user, or None if there isn't one.
+    task_to_complete = next(
+        (
+            task for task in title_matches
+            if users_match(account_user, getattr(task, 'description', ''))
+        ),
+        None,
+    )
+    if task_to_complete is None and title_matches:
+        task_to_complete = title_matches[0]
+
+    if task_to_complete is not None:
+        api.complete_task(task_to_complete.id)
+        TRACER_LOGGER.info(
+            "Marked returned book '%s' complete in Todoist",
+            task_to_complete.content)
+        return
 
     TRACER_LOGGER.info(
         "No matching Todoist due task found for returned book '%s'",

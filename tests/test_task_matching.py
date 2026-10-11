@@ -555,6 +555,70 @@ class TaskMatchingBackendTests(unittest.TestCase):
 
         self.assertEqual(completed, ["due"])
 
+    def test_google_checkin_prefers_due_task_for_same_user(self):
+        tasks = [
+            {
+                "id": "other-user",
+                "title": "KCLS book due: The Mark of Athena",
+                "notes": "Author: Rick Riordan\nAccount: Alex",
+            },
+            {
+                "id": "same-user",
+                "title": "KCLS book due: The Mark of Athena",
+                "notes": "Author: Rick Riordan\nAccount: Sam",
+            },
+        ]
+        service = FakeGoogleService(tasks)
+
+        complete_due_book_google(
+            "The mark of Athena", "Sam",
+            service=service, target_list_id="list")
+
+        self.assertEqual(service.task_api.completed, ["same-user"])
+
+    def test_google_checkin_falls_back_to_title_for_shared_email(self):
+        tasks = [
+            {
+                "id": "due",
+                "title": "KCLS book due: The Mark of Athena",
+                "notes": "Author: Rick Riordan\nAccount: Carol",
+            },
+        ]
+        service = FakeGoogleService(tasks)
+
+        # "Family" is the label of a shared email address, so it won't
+        # match Carol's task, but the book should still be completed.
+        complete_due_book_google(
+            "The mark of Athena", "Family",
+            service=service, target_list_id="list")
+
+        self.assertEqual(service.task_api.completed, ["due"])
+
+    def test_todoist_checkin_prefers_due_task_for_same_user(self):
+        tasks = [
+            SimpleNamespace(
+                id="other-user",
+                content="KCLS book due: The Mark of Athena",
+                description="Account: Alex",
+            ),
+            SimpleNamespace(
+                id="same-user",
+                content="KCLS book due: The Mark of Athena",
+                description="Account: Sam",
+            ),
+        ]
+        completed = []
+        api = SimpleNamespace(
+            get_tasks=lambda project_id: [tasks],
+            complete_task=lambda task_id: completed.append(task_id),
+        )
+
+        complete_due_book_todoist(
+            "The mark of Athena", "Sam",
+            api=api, target_project_id="project")
+
+        self.assertEqual(completed, ["same-user"])
+
     def test_google_completion_follows_next_page_token(self):
         service = FakeGoogleService([], pages=[
             {
@@ -726,16 +790,23 @@ class TaskMatchingBackendTests(unittest.TestCase):
             "Forest Of Shadows\n31000000000000\n"
             "-------------------------\nNumber of checked in items 2"
         )
+        message["To"] = "sam@example.com"
         mail = SimpleNamespace(store=lambda *args: None)
 
         with patch("kcls_parser.fetch_message", return_value=message), \
                 patch("kcls_parser.complete_due_book_in_task_manager") as complete:
-            process_checkin_emails(mail, [b"1"], "google")
+            process_checkin_emails(
+                mail, [b"1"], {"sam@example.com": "Sam"}, "google")
 
         self.assertEqual(complete.call_count, 2)
         self.assertEqual(
             [call.args[1] for call in complete.call_args_list],
             ["The Mark of Athena", "Forest Of Shadows"],
+        )
+        # The recipient email address tells us who returned the books.
+        self.assertEqual(
+            [call.args[3] for call in complete.call_args_list],
+            ["Sam", "Sam"],
         )
 
     def test_blank_hold_title_has_no_task_side_effects(self):

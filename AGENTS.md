@@ -34,9 +34,10 @@ Four core Python modules plus the test suite:
 | --- | --- | --- |
 | `.env` | `EMAIL_USER` / `EMAIL_PASS` (monitored Gmail address and App Password), `TASK_MANAGER` (`google` or `todoist`), `TODOIST_API_TOKEN` (for Todoist), `GOOGLE_TASKLIST_NAME`, and `TODOIST_PROJECT_NAME` | No (gitignored) |
 | `.env.example` | Template showing required and optional environment variable names | Yes |
+| `users.example.json` | Template showing the `users.json` format (email and card-number keys, blank-name example) | Yes |
 | `credentials.json` | Google Cloud OAuth 2.0 client secrets (downloaded from Google Cloud Console) | No (gitignored) |
 | `token.json` | Cached OAuth token, auto-generated on first run by `authenticate_google_tasks()` | No (gitignored) |
-| `users.json` | Flat map of library card number (string) → first name, used to attribute holds and checkouts to family members | No (gitignored) |
+| `users.json` | Flat map of recipient email address (or, for shared addresses, library card number) → name. A blank name means the email itself is the label. Used to attribute every email to a family member | No (gitignored) |
 | `library_locations.json` | List of KCLS branch names and street addresses used to enrich hold tasks with branch addresses | Yes |
 | `library_records.jsonl` | Append-only event history (holds, checkouts, renewals, check-ins), one JSON object per line | No (gitignored) |
 | `library_tracer.log` | Operational log output from the parser and task managers | No (gitignored) |
@@ -85,6 +86,7 @@ The script executes 4 distinct IMAP search passes for unread emails (`UNSEEN`):
 
 - All matching unread emails are processed oldest-to-newest and marked as `\Seen` once handled.
 - If an email cannot be parsed (e.g. empty or unexpected format), an error is logged and the email is marked as read to prevent endless retry loops on subsequent runs.
+- The account user comes from `resolve_user()` in `kcls_parser.py`: a mapped card number (holds/renewals) or a "Dear NAME," greeting (receipts) wins, otherwise the original `To:` recipient address (kept intact by Gmail auto-forwarding) is looked up in `users.json`.
 - Title matching normalizes strings (lowercase, strips punctuation and extra whitespace). If titles do not match exactly, a truncated hold title will match a checkout title if it is at least 10 characters long and the checkout title starts with the hold title.
 
 ## Conventions to preserve

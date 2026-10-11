@@ -13,6 +13,7 @@ from kcls_parser import (
     configure_logging,
     create_task_manager_context,
     get_location_address,
+    get_recipient_email,
     get_tracer_logger,
     load_location_addresses,
     load_user_mapping,
@@ -22,6 +23,7 @@ from kcls_parser import (
     parse_due_date_email,
     parse_hold_email,
     record_library_event,
+    resolve_user,
     search_unread_checkins,
     search_unread_due_dates,
     search_unread_emails,
@@ -236,6 +238,69 @@ Author:
         self.assertEqual(books[0]["user"], "Unknown user")
         self.assertEqual(books[0]["author"], "Unknown")
         self.assertIsNone(books[0]["due_date"])
+
+    def test_recipient_email_names_the_user(self):
+        message = self.make_message("Title: Emailed Book\n")
+        message["To"] = "Sam Reader <SAM@Example.com>"
+
+        books = parse_checkout_receipt(message, {"sam@example.com": "Sam"})
+
+        self.assertEqual(books[0]["user"], "Sam")
+
+    def test_recipient_email_without_name_is_used_as_label(self):
+        message = self.make_message("Title: Emailed Book\n")
+        message["To"] = "sam@example.com"
+
+        self.assertEqual(
+            resolve_user(message, {"sam@example.com": ""}),
+            "sam@example.com",
+        )
+        # An address missing from users.json is still a useful label.
+        self.assertEqual(resolve_user(message, {}), "sam@example.com")
+
+    def test_no_recipient_or_mapping_is_unknown_user(self):
+        message = self.make_message("Title: Emailed Book\n")
+
+        self.assertEqual(resolve_user(message, {}), "Unknown user")
+
+    def test_mapped_recipient_is_preferred_among_several(self):
+        message = self.make_message("")
+        message["To"] = "someone@example.com, sam@example.com"
+
+        self.assertEqual(
+            get_recipient_email(message, {"sam@example.com": "Sam"}),
+            "sam@example.com",
+        )
+
+    def test_card_number_overrides_shared_email(self):
+        message = self.make_message(
+            "Account:\n111\nTitle\nCarol's Book\n")
+        message["To"] = "family@example.com"
+        user_mapping = {"family@example.com": "Family", "111": "Carol"}
+
+        holds = parse_hold_email(message, user_mapping)
+
+        self.assertEqual(holds[0]["user"], "Carol")
+
+    def test_unmapped_card_number_falls_back_to_email(self):
+        message = self.make_message(
+            "Account:\n999\nTitle\nRenewed Book\nDue Date\n"
+            "October 15, 2026\n")
+        message["To"] = "family@example.com"
+
+        books = parse_due_date_email(
+            message, {"family@example.com": "Family"})
+
+        self.assertEqual(books[0]["user"], "Family")
+
+    def test_greeting_overrides_shared_email(self):
+        message = self.make_message("Dear DAVE,\nTitle: Dave's Book\n")
+        message["To"] = "family@example.com"
+        user_mapping = {"family@example.com": "Family", "222": "Dave"}
+
+        books = parse_checkout_receipt(message, user_mapping)
+
+        self.assertEqual(books[0]["user"], "Dave")
 
     def test_empty_message_returns_no_records(self):
         message = self.make_message("")
