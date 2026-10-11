@@ -454,12 +454,17 @@ Author:
 
     def test_main_logs_task_manager_failure_and_closes_mail(self):
         mail = SimpleNamespace(
-            select=Mock(),
+            select=Mock(return_value=("OK", [b"3"])),
             logout=Mock(),
         )
 
         with (
-            patch.dict("os.environ", {"TASK_MANAGER": "google"}),
+            patch.dict("os.environ", {
+                "TASK_MANAGER": "google",
+                "EMAIL_USER": "someone@example.com",
+                "EMAIL_PASS": "app password",
+            }),
+            patch("kcls_parser.load_dotenv"),
             patch("kcls_parser.configure_logging"),
             patch("kcls_parser.close_logging") as close_logging_mock,
             patch("kcls_parser.connect_to_gmail", return_value=mail),
@@ -482,6 +487,55 @@ Author:
         close_logging_mock.assert_called_once()
         user_loader.assert_called_once()
         logger_mock.return_value.exception.assert_called_once()
+
+    def test_main_stops_before_connecting_without_email_login(self):
+        with (
+            patch.dict("os.environ", {
+                "TASK_MANAGER": "google",
+                "EMAIL_USER": "",
+                "EMAIL_PASS": "",
+            }),
+            patch("kcls_parser.load_dotenv"),
+            patch("kcls_parser.configure_logging"),
+            patch("kcls_parser.close_logging") as close_logging_mock,
+            patch("kcls_parser.connect_to_gmail") as connect_mock,
+            patch("kcls_parser.load_user_mapping", return_value={}),
+            patch("kcls_parser.load_location_addresses", return_value={}),
+            patch("kcls_parser.get_tracer_logger") as logger_mock,
+        ):
+            main()
+
+        connect_mock.assert_not_called()
+        close_logging_mock.assert_called_once()
+        logger_mock.return_value.error.assert_called_once()
+
+    def test_main_stops_when_inbox_cannot_be_opened(self):
+        mail = SimpleNamespace(
+            select=Mock(return_value=("NO", [b"mailbox missing"])),
+            logout=Mock(),
+        )
+
+        with (
+            patch.dict("os.environ", {
+                "TASK_MANAGER": "google",
+                "EMAIL_USER": "someone@example.com",
+                "EMAIL_PASS": "app password",
+            }),
+            patch("kcls_parser.load_dotenv"),
+            patch("kcls_parser.configure_logging"),
+            patch("kcls_parser.close_logging") as close_logging_mock,
+            patch("kcls_parser.connect_to_gmail", return_value=mail),
+            patch("kcls_parser.login_to_gmail"),
+            patch("kcls_parser.search_unread_holds") as search_mock,
+            patch("kcls_parser.load_user_mapping", return_value={}),
+            patch("kcls_parser.load_location_addresses", return_value={}),
+            patch("kcls_parser.get_tracer_logger"),
+        ):
+            main()
+
+        search_mock.assert_not_called()
+        mail.logout.assert_called_once()
+        close_logging_mock.assert_called_once()
 
     def test_library_records_use_json_lines_and_separate_tracer_output(self):
         with tempfile.TemporaryDirectory() as log_directory:

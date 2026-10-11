@@ -32,7 +32,7 @@ Hold completion normalizes titles by lowercasing, removing punctuation (includin
 
 ## Dependencies
 
-You will need Python 3 installed. It's recommended to use a virtual environment so these packages stay separate from your system Python:
+You will need Python 3.11 or newer installed. It's recommended to use a virtual environment so these packages stay separate from your system Python:
 
 ```bash
 python3 -m venv .venv

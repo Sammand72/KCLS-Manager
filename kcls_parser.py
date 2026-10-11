@@ -903,10 +903,30 @@ def main():
     user_mapping = load_user_mapping(json_path)
     location_addresses = load_location_addresses(locations_path)
 
+    # Check the login details before connecting. Without this, a missing
+    # value reaches imaplib as None and crashes with a confusing TypeError.
+    email_user = os.getenv('EMAIL_USER', '').strip()
+    email_pass = os.getenv('EMAIL_PASS', '')
+    if not email_user or not email_pass:
+        get_tracer_logger().error(
+            "EMAIL_USER and EMAIL_PASS must both be set in .env. "
+            "Exiting script."
+        )
+        close_logging()
+        return
+
     mail = connect_to_gmail()
     try:
-        login_to_gmail(mail, os.getenv('EMAIL_USER'), os.getenv('EMAIL_PASS'))
-        mail.select('inbox')
+        login_to_gmail(mail, email_user, email_pass)
+
+        # select() opens the inbox; every search below depends on it working.
+        status, _ = mail.select('inbox')
+        if status != 'OK':
+            get_tracer_logger().error(
+                "Could not open the Gmail inbox (status: %s). Exiting script.",
+                status,
+            )
+            return
         hold_email_ids = search_unread_holds(mail)
         receipt_email_ids = search_unread_receipts(mail)
         due_date_email_ids = search_unread_due_dates(mail)
