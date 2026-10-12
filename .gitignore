@@ -2,7 +2,7 @@
 .vscode/
 .idea/
 
-# Ignore Google API Keys and user IDs
+# Ignore personal Google sign-in tokens and user IDs.
 credentials.json
 token.json
 users.json

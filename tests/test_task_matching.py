@@ -1,5 +1,4 @@
 import os
-import tempfile
 import unittest
 from datetime import UTC, date, datetime
 from email.message import EmailMessage
@@ -25,7 +24,6 @@ from kcls_task_matching import (
 from kcls_tasker_gtasks import (
     add_due_book_to_google,
     add_hold_to_google,
-    authenticate_google_tasks,
     complete_due_book_google,
     expire_hold_google,
     get_tasklist_id,
@@ -412,60 +410,6 @@ class TaskMatchingBackendTests(unittest.TestCase):
             mark_hold_complete_google("Little Women", "Sam")
 
         self.assertEqual(service.task_api.completed, ["right-user"])
-
-    def test_google_credentials_refresh_without_browser(self):
-        credentials = SimpleNamespace(
-            valid=False,
-            expired=True,
-            refresh_token="refresh-token",
-            token="new-token",
-            token_uri="token-uri",
-            client_id="client-id",
-            client_secret="client-secret",
-            scopes=["scope"],
-        )
-
-        def refresh(_request):
-            credentials.valid = True
-
-        credentials.refresh = refresh
-
-        with tempfile.TemporaryDirectory() as directory, patch(
-                "kcls_tasker_gtasks.script_dir", directory), patch(
-                "kcls_tasker_gtasks.os.path.exists", return_value=True), patch(
-                "kcls_tasker_gtasks.Credentials.from_authorized_user_file",
-                return_value=credentials), patch(
-                "kcls_tasker_gtasks.build", return_value="service"), patch(
-                "kcls_tasker_gtasks.is_interactive", return_value=False):
-            service = authenticate_google_tasks()
-
-        self.assertEqual(service, "service")
-
-    def test_google_refresh_failure_in_noninteractive_run_is_actionable(self):
-        credentials = SimpleNamespace(
-            valid=False,
-            expired=True,
-            refresh_token="refresh-token",
-        )
-        credentials.refresh = lambda _request: (_ for _ in ()).throw(
-            ConnectionError("network unavailable")
-        )
-
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch("kcls_tasker_gtasks.script_dir", directory),
-            patch("kcls_tasker_gtasks.os.path.exists", return_value=True),
-            patch(
-                "kcls_tasker_gtasks.Credentials.from_authorized_user_file",
-                return_value=credentials,
-            ),
-            patch("kcls_tasker_gtasks.is_interactive", return_value=False),
-            patch("kcls_tasker_gtasks.InstalledAppFlow.run_local_server") as flow,
-            self.assertRaisesRegex(RuntimeError, "interactive browser login"),
-        ):
-            authenticate_google_tasks()
-
-        flow.assert_not_called()
 
     def test_google_due_date_update_uses_title_and_user_matching(self):
         tasks = [

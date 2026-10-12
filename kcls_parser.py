@@ -15,10 +15,11 @@ import dateparser
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
+from kcls_google_auth import get_google_credentials, get_google_email
 from kcls_tasker_gtasks import (
     add_due_book_to_google,
     add_hold_to_google,
-    authenticate_google_tasks,
+    build_tasks_service,
     complete_due_book_google,
     expire_hold_google,
     get_tasklist_id,
@@ -468,11 +469,17 @@ def connect_to_gmail(max_retries=10, wait_seconds=15):
     raise SystemExit
 
 
-def login_to_gmail(mail, username, password, max_attempts=3, wait_seconds=15):
-    """Log in to Gmail, retrying temporary IMAP errors but not bad credentials."""
+def try_gmail_login(
+        login_step, auth_failure_message, max_attempts=3, wait_seconds=15):
+    """Run one Gmail login method, retrying temporary IMAP errors.
+
+    login_step is a small function that does the actual login (password or
+    Google sign-in token). Bad credentials are not retried, because trying
+    the same wrong details again would never work.
+    """
     for attempt in range(max_attempts):
         try:
-            mail.login(username, password)
+            login_step()
             get_tracer_logger().info("Logged in to the mail server.")
             return
         except imaplib.IMAP4.error as error:
@@ -486,10 +493,7 @@ def login_to_gmail(mail, username, password, max_attempts=3, wait_seconds=15):
                 )
             )
             if authentication_failed:
-                get_tracer_logger().error(
-                    "Could not authenticate with the mail server. "
-                    "Check EMAIL_USER and EMAIL_PASS."
-                )
+                get_tracer_logger().error(auth_failure_message)
                 raise SystemExit
 
             if attempt + 1 == max_attempts:
@@ -508,6 +512,45 @@ def login_to_gmail(mail, username, password, max_attempts=3, wait_seconds=15):
                 wait_seconds,
             )
             time.sleep(wait_seconds)
+
+
+def login_to_gmail(mail, username, password, max_attempts=3, wait_seconds=15):
+    """Log in to Gmail with an App Password (EMAIL_LOGIN_TYPE=legacy)."""
+    try_gmail_login(
+        login_step=lambda: mail.login(username, password),
+        auth_failure_message=(
+            "Could not authenticate with the mail server. "
+            "Check EMAIL_USER and EMAIL_PASS."
+        ),
+        max_attempts=max_attempts,
+        wait_seconds=wait_seconds,
+    )
+
+
+def build_xoauth2_string(username, access_token):
+    """Build the login text Gmail's IMAP server expects for OAuth (XOAUTH2).
+
+    \x01 is a special separator character required by the XOAUTH2 format.
+    """
+    return f"user={username}\x01auth=Bearer {access_token}\x01\x01"
+
+
+def login_to_gmail_oauth(
+        mail, username, access_token, max_attempts=3, wait_seconds=15):
+    """Log in to Gmail with a Google sign-in token (EMAIL_LOGIN_TYPE=default)."""
+    auth_string = build_xoauth2_string(username, access_token)
+    try_gmail_login(
+        # imaplib calls our small function to get the text to send; the
+        # argument it passes in (the server's challenge) isn't needed here.
+        login_step=lambda: mail.authenticate(
+            'XOAUTH2', lambda _challenge: auth_string),
+        auth_failure_message=(
+            "Google sign-in was rejected by the mail server. "
+            "Delete token.json and run the script again to sign in."
+        ),
+        max_attempts=max_attempts,
+        wait_seconds=wait_seconds,
+    )
 
 
 def search_unread_emails(mail, from_address, subject_query, email_kind):
@@ -585,8 +628,28 @@ def validate_task_manager(task_manager):
         raise ValueError(f"Invalid task manager: {task_manager}")
 
 
-def create_task_manager_context(task_manager):
-    """Authenticate once and resolve the destination used by this run."""
+def get_email_login_type():
+    """Read EMAIL_LOGIN_TYPE from the environment; blank means 'default'."""
+    return os.getenv('EMAIL_LOGIN_TYPE', '').strip().lower() or 'default'
+
+
+def validate_email_login_type(email_login_type):
+    """Reject Gmail login types that this script does not support.
+
+    'default' opens a Google sign-in window; 'legacy' uses an App Password.
+    """
+    if email_login_type not in ('default', 'legacy'):
+        get_tracer_logger().error(
+            "Invalid EMAIL_LOGIN_TYPE specified in .env: %s", email_login_type)
+        raise ValueError(f"Invalid email login type: {email_login_type}")
+
+
+def create_task_manager_context(task_manager, google_creds=None):
+    """Authenticate once and resolve the destination used by this run.
+
+    google_creds are the credentials from the Google sign-in, if this run
+    already did one. Reusing them avoids asking the user to sign in twice.
+    """
     validate_task_manager(task_manager)
 
     if task_manager == 'todoist':
@@ -596,7 +659,12 @@ def create_task_manager_context(task_manager):
             'target_project_id': get_project_id(api, get_project_name()),
         }
 
-    service = authenticate_google_tasks()
+    if google_creds is None:
+        # App Password mode: Gmail didn't need a Google sign-in, so sign in
+        # now with only the Tasks permission.
+        google_creds = get_google_credentials(
+            include_gmail=False, include_tasks=True)
+    service = build_tasks_service(google_creds)
     return {
         'service': service,
         'target_list_id': get_tasklist_id(service, get_tasklist_name()),
@@ -949,24 +1017,49 @@ def main():
     get_tracer_logger().info("Selected Task Manager: %s", task_manager)
     validate_task_manager(task_manager)
 
+    email_login_type = get_email_login_type()
+    get_tracer_logger().info("Selected email login type: %s", email_login_type)
+    validate_email_login_type(email_login_type)
+
     user_mapping = load_user_mapping(json_path)
     location_addresses = load_location_addresses(locations_path)
 
-    # Check the login details before connecting. Without this, a missing
-    # value reaches imaplib as None and crashes with a confusing TypeError.
-    email_user = os.getenv('EMAIL_USER', '').strip()
-    email_pass = os.getenv('EMAIL_PASS', '')
-    if not email_user or not email_pass:
-        get_tracer_logger().error(
-            "EMAIL_USER and EMAIL_PASS must both be set in .env. "
-            "Exiting script."
-        )
-        close_logging()
-        return
+    # Stays None in legacy mode; Google Tasks then signs in on its own later.
+    google_creds = None
+    email_pass = ''
+
+    if email_login_type == 'legacy':
+        # Check the login details before connecting. Without this, a missing
+        # value reaches imaplib as None and crashes with a confusing TypeError.
+        email_user = os.getenv('EMAIL_USER', '').strip()
+        email_pass = os.getenv('EMAIL_PASS', '')
+        if not email_user or not email_pass:
+            get_tracer_logger().error(
+                "EMAIL_USER and EMAIL_PASS must both be set in .env "
+                "when EMAIL_LOGIN_TYPE=legacy. Exiting script."
+            )
+            close_logging()
+            return
+    else:
+        # One Google sign-in covers Gmail, plus Google Tasks if it's in use.
+        try:
+            google_creds = get_google_credentials(
+                include_gmail=True,
+                include_tasks=(task_manager == 'google'),
+            )
+            email_user = get_google_email(google_creds)
+        except Exception:  # noqa: BLE001
+            get_tracer_logger().exception(
+                "Could not sign in to Google. Exiting script.")
+            close_logging()
+            return
 
     mail = connect_to_gmail()
     try:
-        login_to_gmail(mail, email_user, email_pass)
+        if email_login_type == 'legacy':
+            login_to_gmail(mail, email_user, email_pass)
+        else:
+            login_to_gmail_oauth(mail, email_user, google_creds.token)
 
         # select() opens the inbox; every search below depends on it working.
         status, _ = mail.select('inbox')
@@ -984,7 +1077,8 @@ def main():
         if (hold_email_ids or receipt_email_ids or due_date_email_ids or
                 checkin_email_ids):
             try:
-                task_context = create_task_manager_context(task_manager)
+                task_context = create_task_manager_context(
+                    task_manager, google_creds)
             except Exception:  # noqa: BLE001
                 get_tracer_logger().exception(
                     "Could not initialize the %s task manager. "

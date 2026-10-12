@@ -54,7 +54,7 @@ Note: On linux instead of pip you may use apt to install the underlying librarie
 
 ### Other files
 
-* **credentials.json**- contains Google Cloud OAuth 2.0 Client ID
+* **credentials.json**- the Google OAuth client used by the sign-in window. It is not in the repository, so either ask the project owner to send it to you privately, or [make your own](#getting-your-own-credentialsjson). Put it next to the script. Not needed if you use `EMAIL_LOGIN_TYPE=legacy` with Todoist.
 * **users.json**- optional; copy [users.example.json](users.example.json) to
   `users.json` and fill in multiple email receivers' details. Each KCLS email is attributed
   to the address it was originally sent to (its `To:` header):
@@ -70,12 +70,14 @@ Note: On linux instead of pip you may use apt to install the underlying librarie
   (a Gmail forwarding address or filter) from each person's inbox. A manual
   "Forward" changes the sender, so the parser's `noreply@kcls.org` searches
   won't find it.
-* **.env**- contains email id and app password for the email being monitored, plus:
+* **.env**- settings for the script:
+  * **EMAIL_LOGIN_TYPE**- `default` (or blank) opens a Google sign-in window on the first run. `legacy` logs in with `EMAIL_USER` and `EMAIL_PASS` (a Gmail App Password) instead.
+  * **EMAIL_USER** / **EMAIL_PASS**- the monitored Gmail address and its App Password (only needed if `EMAIL_LOGIN_TYPE=legacy`)
   * **TASK_MANAGER**- set to `google` or `todoist` to choose which task manager holds get pushed to (defaults to `google` if unset)
   * **TODOIST_API_TOKEN**- your Todoist personal API token (only needed if `TASK_MANAGER=todoist`)
   * **GOOGLE_TASKLIST_NAME**- The name of the Google Tasks tasklist to push tasks to. If blank or unset, tasks go to Google's default tasklist.
   * **TODOIST_PROJECT_NAME**- The name of the Todoist Project to push tasks to. If blank or unset, tasks go to Todoist's Inbox.
-* (**token.json** is created automatically)
+* (**token.json** is created automatically after you sign in. It is personal, so never share or commit it.)
 * **library_locations.json**- contains the library branch names and addresses used for hold tasks. Each entry has a `name` and an `address` field.
 Add the credential and personal-data files to the `.gitignore`; keep the shared library location list available to the parser.
 
@@ -85,9 +87,40 @@ The branch name from the hold email remains in the task's `Location:` line. When
 
 This script can push holds to either Google Tasks or Todoist, but never both at once - set `TASK_MANAGER` in `.env` to pick one. Set `GOOGLE_TASKLIST_NAME` or `TODOIST_PROJECT_NAME` in `.env` to choose a destination. If the selected name is blank or cannot be found, tasks go to the manager's default destination.
 
+### Google sign-in
+
+Run the script manually the first time. A browser window opens: sign in to the Gmail account you want monitored and click **Allow**. With `TASK_MANAGER=google`, that same sign-in also covers Google Tasks. The sign-in is saved in `token.json`, so later runs need no browser.
+
+Google shows a "Google hasn't verified this app" screen, because reading Gmail is a restricted permission and this is a personal project. Click **Advanced → Go to KCLS-manager** to continue.
+
+If you upgraded from an older version, the script asks you to sign in again once, to add the Gmail permission. To keep using an App Password for Gmail instead, set `EMAIL_LOGIN_TYPE=legacy`; Google Tasks then asks for its own sign-in.
+
+### Getting your own credentials.json
+
+If you can't get `credentials.json` from the project owner, you can make your own for free. This takes about 10 minutes and is done once.
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/), sign in, and create a new project (any name, e.g. `KCLS-manager`).
+2. Open **APIs & Services → Library** and enable:
+   * **Gmail API** (needed for the sign-in login, `EMAIL_LOGIN_TYPE=default`)
+   * **Google Tasks API** (needed if `TASK_MANAGER=google`)
+3. Open **Google Auth Platform** (search for "OAuth consent screen" if you can't find it) and click **Get started**:
+   * **App information:** any app name, and your email as the user support email.
+   * **Audience:** choose **External**.
+   * **Contact information:** your email.
+4. Under **Data access**, click **Add or remove scopes** and add these two (paste them into "Manually add scopes"):
+   * `https://mail.google.com/`
+   * `https://www.googleapis.com/auth/tasks`
+5. Under **Audience**, click **Publish app** so the status is **In production**. In "Testing" status, the sign-in expires every 7 days and scheduled runs start failing.
+6. Under **Clients**, click **Create client**, choose application type **Desktop app**, and create it.
+7. Click the download button for the new client, rename the downloaded file to `credentials.json`, and put it in the same folder as `kcls_parser.py`.
+
+Never commit or share `credentials.json` publicly. It is already in `.gitignore`.
+
+When you sign in for the first time, the warning screen shows your own app name. If the sign-in page says "Something went wrong" after you click **Continue**/**Go to ...**, try again in a private/incognito window.
+
 ### Google Tasks
 
-The method to get the Google Tasks API is complex and will require a guide (You can find several on YouTube). The script needs to generate the token.json, so the first run has to be manual and will open a browser window with a login page. If a saved token expires and cannot be refreshed, run the script manually again before the next cron or Task Scheduler run. Unattended runs fail with a clear log message instead of trying to open or wait for a browser.
+No extra API setup is needed; Google Tasks uses the sign-in described above. If a saved token expires and cannot be refreshed, run the script manually again before the next cron or Task Scheduler run. Unattended runs fail with a clear log message instead of trying to open or wait for a browser.
 
 ### Todoist
 
@@ -146,7 +179,7 @@ crontab -l
 
 * All email types are supported but a cancelled hold will not send an email, so the task will have to be manually removed. OVERDUE tasks arent changed.
 * Direct calendar events arent supported yet.
-* Current IMAP connection is limited to Gmail, with the only current supported auth being the app password.
+* Current IMAP connection is limited to Gmail (Google sign-in, or an App Password in legacy mode).
 * Limited to 2 task managers, with no simultaneous tasks
 * The email parser is organized into small functions, but it still processes one email at a time and uses the existing task-manager APIs.
 * Web scraper version is planned

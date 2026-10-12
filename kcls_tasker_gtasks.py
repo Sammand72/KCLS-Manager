@@ -1,15 +1,11 @@
 # Python3 code to take the hold details from kcls_parser.py into Google Tasks API
 
-import json
 import logging
 import os
-import sys
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from kcls_google_auth import get_google_credentials
 from kcls_task_matching import (
     DUE_TASK_TITLE_PREFIX,
     EXPIRED_TASK_TITLE_PREFIX,
@@ -22,11 +18,6 @@ from kcls_task_matching import (
     users_match,
 )
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-
-# permission we are asking Google for
-SCOPES = ['https://www.googleapis.com/auth/tasks']
-
 TRACER_LOGGER = logging.getLogger("kcls.tracer")
 
 
@@ -35,69 +26,19 @@ def get_tasklist_name():
     return os.getenv('GOOGLE_TASKLIST_NAME', '').strip()
 
 
-def is_interactive():
-    """Return whether browser-based OAuth can be completed in this process."""
-    return sys.stdin.isatty() and sys.stdout.isatty()
-
-
-def raise_non_interactive_auth_error(cause=None):
-    """Explain how to complete Google OAuth when no browser is available."""
-    message = (
-        "Google Tasks authentication needs an interactive browser login. "
-        "Run the script manually once to create or refresh token.json before "
-        "running it from cron or Task Scheduler."
-    )
-    if cause is not None:
-        raise RuntimeError(message) from cause
-    raise RuntimeError(message)
+def build_tasks_service(creds):
+    """Build the Google Tasks API client from already signed-in credentials."""
+    return build('tasks', 'v1', credentials=creds)
 
 
 def authenticate_google_tasks():
-    """Load saved Google credentials or complete the OAuth login flow."""
-    creds = None
-    token_path = os.path.join(script_dir, 'token.json')
-    credentials_path = os.path.join(script_dir, 'credentials.json')
+    """Sign in to Google (Tasks permission only) and return the Tasks API.
 
-    # check if we already logged in (saved in token.json)
-    if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-
-    # if no valid credentials, let user log in
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception as error:
-                TRACER_LOGGER.exception(
-                    "Could not refresh Google Tasks credentials.")
-                if not is_interactive():
-                    raise_non_interactive_auth_error(error)
-                creds = None
-        else:
-            if not is_interactive():
-                raise_non_interactive_auth_error()
-
-        if creds is None:
-            # opens browser to click "Allow"
-            flow = InstalledAppFlow.from_client_secrets_file(
-                credentials_path, SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        creds_data = {
-            'token': creds.token,
-            'refresh_token': creds.refresh_token,
-            'token_uri': creds.token_uri,
-            'client_id': creds.client_id,
-            'client_secret': creds.client_secret,
-            'scopes': creds.scopes
-        }
-
-        # Save the manually built dictionary to the file
-        with open(token_path, 'w') as token:
-            json.dump(creds_data, token)
-
-    # build and return API
-    return build('tasks', 'v1', credentials=creds)
+    kcls_parser.py usually signs in once and passes the credentials along;
+    this is the fallback when a task function is called on its own.
+    """
+    creds = get_google_credentials(include_gmail=False, include_tasks=True)
+    return build_tasks_service(creds)
 
 
 def get_tasklist_id(service, target_name):

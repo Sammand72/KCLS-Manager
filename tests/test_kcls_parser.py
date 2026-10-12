@@ -29,6 +29,7 @@ from kcls_parser import (
     search_unread_emails,
     search_unread_holds,
     search_unread_receipts,
+    validate_email_login_type,
     validate_task_manager,
 )
 
@@ -506,7 +507,8 @@ Author:
         service = object()
 
         with (
-            patch("kcls_parser.authenticate_google_tasks", return_value=service),
+            patch("kcls_parser.get_google_credentials", return_value="creds"),
+            patch("kcls_parser.build_tasks_service", return_value=service),
             patch("kcls_parser.get_tasklist_name", return_value="Reading"),
             patch("kcls_parser.get_tasklist_id", return_value="list-id"),
         ):
@@ -517,6 +519,141 @@ Author:
             "target_list_id": "list-id",
         })
 
+    def test_google_context_reuses_existing_sign_in(self):
+        with (
+            patch("kcls_parser.get_google_credentials") as sign_in_mock,
+            patch("kcls_parser.build_tasks_service") as build_mock,
+            patch("kcls_parser.get_tasklist_name", return_value=""),
+        ):
+            create_task_manager_context("google", google_creds="creds")
+
+        sign_in_mock.assert_not_called()
+        build_mock.assert_called_once_with("creds")
+
+    def test_email_login_type_defaults_when_blank(self):
+        from kcls_parser import get_email_login_type
+
+        with patch.dict("os.environ", {"EMAIL_LOGIN_TYPE": "  "}):
+            self.assertEqual(get_email_login_type(), "default")
+        with patch.dict("os.environ", {"EMAIL_LOGIN_TYPE": "Legacy"}):
+            self.assertEqual(get_email_login_type(), "legacy")
+
+    def test_invalid_email_login_type_is_rejected(self):
+        validate_email_login_type("default")
+        validate_email_login_type("legacy")
+        with self.assertRaises(ValueError):
+            validate_email_login_type("password")
+
+    def test_oauth_login_sends_xoauth2_string(self):
+        from kcls_parser import login_to_gmail_oauth
+
+        calls = []
+
+        def authenticate(mechanism, auth_object):
+            # imaplib would call auth_object with the server's challenge.
+            calls.append((mechanism, auth_object(b"")))
+            return ("OK", [])
+
+        mail = SimpleNamespace(authenticate=authenticate)
+
+        login_to_gmail_oauth(mail, "me@gmail.com", "token123", wait_seconds=0)
+
+        self.assertEqual(calls, [(
+            "XOAUTH2",
+            "user=me@gmail.com\x01auth=Bearer token123\x01\x01",
+        )])
+
+    def test_oauth_login_does_not_retry_rejected_token(self):
+        from kcls_parser import login_to_gmail_oauth
+
+        def authenticate(*args):
+            raise imaplib.IMAP4.error(
+                "[AUTHENTICATIONFAILED] Invalid credentials (Failure)")
+
+        mail = SimpleNamespace(authenticate=Mock(side_effect=authenticate))
+
+        with (
+            patch("kcls_parser.time.sleep") as sleep,
+            self.assertRaises(SystemExit),
+        ):
+            login_to_gmail_oauth(mail, "me@gmail.com", "bad", wait_seconds=0)
+
+        mail.authenticate.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_main_default_login_signs_in_once_for_gmail_and_tasks(self):
+        mail = SimpleNamespace(
+            select=Mock(return_value=("OK", [b"0"])),
+            logout=Mock(),
+        )
+        creds = SimpleNamespace(token="token123")
+
+        with (
+            patch.dict("os.environ", {
+                "TASK_MANAGER": "google",
+                "EMAIL_LOGIN_TYPE": "",
+                "EMAIL_USER": "",
+                "EMAIL_PASS": "",
+            }),
+            patch("kcls_parser.load_dotenv"),
+            patch("kcls_parser.configure_logging"),
+            patch("kcls_parser.close_logging"),
+            patch(
+                "kcls_parser.get_google_credentials", return_value=creds
+            ) as sign_in_mock,
+            patch(
+                "kcls_parser.get_google_email", return_value="me@gmail.com"
+            ),
+            patch("kcls_parser.connect_to_gmail", return_value=mail),
+            patch("kcls_parser.login_to_gmail") as password_login_mock,
+            patch("kcls_parser.login_to_gmail_oauth") as oauth_login_mock,
+            patch("kcls_parser.search_unread_holds", return_value=[b"1"]),
+            patch("kcls_parser.search_unread_receipts", return_value=[]),
+            patch("kcls_parser.search_unread_due_dates", return_value=[]),
+            patch("kcls_parser.search_unread_checkins", return_value=[]),
+            patch("kcls_parser.load_user_mapping", return_value={}),
+            patch("kcls_parser.load_location_addresses", return_value={}),
+            patch(
+                "kcls_parser.create_task_manager_context", return_value={}
+            ) as context_mock,
+            patch("kcls_parser.process_hold_emails"),
+            patch("kcls_parser.get_tracer_logger"),
+        ):
+            main()
+
+        sign_in_mock.assert_called_once_with(
+            include_gmail=True, include_tasks=True)
+        oauth_login_mock.assert_called_once_with(
+            mail, "me@gmail.com", "token123")
+        password_login_mock.assert_not_called()
+        context_mock.assert_called_once_with("google", creds)
+
+    def test_main_default_login_failure_stops_before_connecting(self):
+        with (
+            patch.dict("os.environ", {
+                "TASK_MANAGER": "todoist",
+                "EMAIL_LOGIN_TYPE": "default",
+            }),
+            patch("kcls_parser.load_dotenv"),
+            patch("kcls_parser.configure_logging"),
+            patch("kcls_parser.close_logging") as close_logging_mock,
+            patch(
+                "kcls_parser.get_google_credentials",
+                side_effect=RuntimeError("needs browser"),
+            ) as sign_in_mock,
+            patch("kcls_parser.connect_to_gmail") as connect_mock,
+            patch("kcls_parser.load_user_mapping", return_value={}),
+            patch("kcls_parser.load_location_addresses", return_value={}),
+            patch("kcls_parser.get_tracer_logger") as logger_mock,
+        ):
+            main()
+
+        sign_in_mock.assert_called_once_with(
+            include_gmail=True, include_tasks=False)
+        connect_mock.assert_not_called()
+        close_logging_mock.assert_called_once()
+        logger_mock.return_value.exception.assert_called_once()
+
     def test_main_logs_task_manager_failure_and_closes_mail(self):
         mail = SimpleNamespace(
             select=Mock(return_value=("OK", [b"3"])),
@@ -526,6 +663,7 @@ Author:
         with (
             patch.dict("os.environ", {
                 "TASK_MANAGER": "google",
+                "EMAIL_LOGIN_TYPE": "legacy",
                 "EMAIL_USER": "someone@example.com",
                 "EMAIL_PASS": "app password",
             }),
@@ -557,6 +695,7 @@ Author:
         with (
             patch.dict("os.environ", {
                 "TASK_MANAGER": "google",
+                "EMAIL_LOGIN_TYPE": "legacy",
                 "EMAIL_USER": "",
                 "EMAIL_PASS": "",
             }),
@@ -583,6 +722,7 @@ Author:
         with (
             patch.dict("os.environ", {
                 "TASK_MANAGER": "google",
+                "EMAIL_LOGIN_TYPE": "legacy",
                 "EMAIL_USER": "someone@example.com",
                 "EMAIL_PASS": "app password",
             }),
