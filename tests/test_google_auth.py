@@ -1,15 +1,20 @@
+import json
 import os
 import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from test_secrets import FakeKeyring
+
 from kcls_google_auth import (
     GMAIL_SCOPE,
     TASKS_SCOPE,
     build_scope_list,
     get_google_credentials,
+    save_credentials,
 )
+from kcls_secrets import SERVICE_NAME
 
 
 def make_saved_credentials(scopes, valid=True):
@@ -35,6 +40,22 @@ class GoogleAuthTests(unittest.TestCase):
             "kcls_google_auth.script_dir", self.directory.name)
         script_dir_patch.start()
         self.addCleanup(script_dir_patch.stop)
+        # Default to file mode, even if the real .env says keychain.
+        env_patch = patch.dict("os.environ", {"SECRET_STORAGE": ""})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+
+    def use_fake_keychain(self):
+        """Switch to keychain mode, backed by an in-memory fake keychain."""
+        os.environ["SECRET_STORAGE"] = "keychain"
+        fake_keyring = FakeKeyring()
+        keyring_patch = patch("kcls_secrets.keyring", fake_keyring)
+        keyring_patch.start()
+        self.addCleanup(keyring_patch.stop)
+        return fake_keyring
+
+    def token_file_path(self):
+        return os.path.join(self.directory.name, "token.json")
 
     def write_token_file(self):
         """Create an empty token.json so the code tries to load it."""
@@ -138,6 +159,70 @@ class GoogleAuthTests(unittest.TestCase):
             get_google_credentials(include_gmail=True)
 
         flow_mock.from_client_secrets_file.assert_not_called()
+
+    def test_keychain_token_skips_browser(self):
+        fake_keyring = self.use_fake_keychain()
+        fake_keyring.set_password(
+            SERVICE_NAME, "GOOGLE_TOKEN", '{"refresh_token": "r"}')
+        saved = make_saved_credentials([GMAIL_SCOPE])
+
+        with (
+            patch(
+                "kcls_google_auth.Credentials.from_authorized_user_info",
+                return_value=saved,
+            ) as load_mock,
+            patch("kcls_google_auth.InstalledAppFlow") as flow_mock,
+        ):
+            creds = get_google_credentials(include_gmail=True)
+
+        self.assertIs(creds, saved)
+        load_mock.assert_called_once_with({"refresh_token": "r"})
+        flow_mock.from_client_secrets_file.assert_not_called()
+
+    def test_keychain_mode_saves_to_keychain_not_file(self):
+        fake_keyring = self.use_fake_keychain()
+
+        save_credentials(
+            make_saved_credentials([GMAIL_SCOPE]), self.token_file_path())
+
+        self.assertFalse(os.path.exists(self.token_file_path()))
+        saved_text = fake_keyring.get_password(SERVICE_NAME, "GOOGLE_TOKEN")
+        self.assertEqual(json.loads(saved_text)["refresh_token"],
+                         "refresh-token")
+
+    def test_old_token_file_moves_into_keychain(self):
+        fake_keyring = self.use_fake_keychain()
+        with open(self.token_file_path(), "w") as token_file:
+            token_file.write('{"refresh_token": "r"}')
+        saved = make_saved_credentials([GMAIL_SCOPE])
+
+        with patch(
+            "kcls_google_auth.Credentials.from_authorized_user_info",
+            return_value=saved,
+        ):
+            creds = get_google_credentials(include_gmail=True)
+
+        self.assertIs(creds, saved)
+        self.assertFalse(os.path.exists(self.token_file_path()))
+        self.assertEqual(
+            fake_keyring.get_password(SERVICE_NAME, "GOOGLE_TOKEN"),
+            '{"refresh_token": "r"}',
+        )
+
+    def test_token_file_is_kept_if_keychain_did_not_save_it(self):
+        fake_keyring = self.use_fake_keychain()
+        # A keychain that silently forgets everything it is given.
+        fake_keyring.set_password = lambda service, name, value: None
+        with open(self.token_file_path(), "w") as token_file:
+            token_file.write('{"refresh_token": "r"}')
+
+        with patch(
+            "kcls_google_auth.Credentials.from_authorized_user_info",
+            return_value=make_saved_credentials([GMAIL_SCOPE]),
+        ):
+            get_google_credentials(include_gmail=True)
+
+        self.assertTrue(os.path.exists(self.token_file_path()))
 
 
 if __name__ == "__main__":

@@ -16,17 +16,19 @@ The owner is learning Python with this project. Favor the codebase's existing pl
 
 ## Architecture
 
-Five core Python modules plus the test suite:
+Six core Python modules plus the test suite:
 
 - [kcls_parser.py](kcls_parser.py) — Main entrypoint. Connects to Gmail over IMAP, searches the inbox for unread KCLS emails (holds, checkout receipts, renewals, check-ins), parses message bodies into structured records, updates/creates tasks, logs library events to `library_records.jsonl`, and marks emails as read.
 - [kcls_google_auth.py](kcls_google_auth.py) — Shared Google sign-in. `get_google_credentials(include_gmail, include_tasks)` loads/refreshes `token.json` or opens the browser OAuth flow using `credentials.json`, re-asking when a saved token lacks a needed scope. `get_google_email()` reads the signed-in address for IMAP XOAUTH2 login.
+- [kcls_secrets.py](kcls_secrets.py) — Secret storage. `get_secret(name)` reads `TODOIST_API_TOKEN`, `EMAIL_USER`, `EMAIL_PASS` from `.env` (`SECRET_STORAGE=file`, the default) or from the OS keychain via the `keyring` library (`SECRET_STORAGE=keychain`, service name `KCLS-manager`). Also holds the Google token as `GOOGLE_TOKEN` in keychain mode. Run directly (`python kcls_secrets.py set|delete|status`) to manage keychain entries.
 - [kcls_tasker_gtasks.py](kcls_tasker_gtasks.py) — Google Tasks integration. Builds the Tasks API client from shared Google credentials, resolves the target tasklist by name (`GOOGLE_TASKLIST_NAME`), inserts hold and due tasks, renames expired holds, updates renewed due dates, and marks completed tasks.
 - [kcls_tasker_todoist.py](kcls_tasker_todoist.py) — Todoist integration. Authenticates with a static API token (`TODOIST_API_TOKEN`), resolves the target project by name (`TODOIST_PROJECT_NAME`), inserts hold and due tasks, renames expired holds, updates renewed due dates, and marks completed tasks.
 - [kcls_task_matching.py](kcls_task_matching.py) — Shared title and user normalization and matching logic. Handles substring matching for truncated KCLS titles (requiring >= 10 characters) and validates account user attribution.
 - [tests/](tests/) — Unit test suite with offline mocks:
   - `tests/test_kcls_parser.py` — Tests IMAP connection retry/fail logic, logging, location address loading, and body parsing for all email types.
   - `tests/test_task_matching.py` — Tests title/user normalization and task-matching logic across task managers.
-  - `tests/test_google_auth.py` — Tests Google sign-in scopes, token reuse/refresh, re-consent, and non-interactive errors.
+  - `tests/test_google_auth.py` — Tests Google sign-in scopes, token reuse/refresh, re-consent, non-interactive errors, and keychain token storage/migration.
+  - `tests/test_secrets.py` — Tests `SECRET_STORAGE` handling, keychain reads/writes (with an in-memory fake keyring), and the helper CLI.
 
 `kcls_parser.py` calls the corresponding task functions in `kcls_tasker_gtasks.py` or `kcls_tasker_todoist.py` depending on the `TASK_MANAGER` env var (`google` or `todoist`) — never both simultaneously. Both tasker modules share consistent interfaces so they are interchangeable at call sites.
 
@@ -34,11 +36,11 @@ Five core Python modules plus the test suite:
 
 | File | Contents | Checked in? |
 | --- | --- | --- |
-| `.env` | `EMAIL_LOGIN_TYPE` (`default` = Google sign-in window, `legacy` = App Password; blank means `default`), `EMAIL_USER` / `EMAIL_PASS` (legacy only: monitored Gmail address and App Password), `TASK_MANAGER` (`google` or `todoist`), `TODOIST_API_TOKEN` (for Todoist), `GOOGLE_TASKLIST_NAME`, and `TODOIST_PROJECT_NAME` | No (gitignored) |
+| `.env` | `SECRET_STORAGE` (`file` = secrets in `.env`/`token.json`, `keychain` = OS keychain; blank means `file`), `EMAIL_LOGIN_TYPE` (`default` = Google sign-in window, `legacy` = App Password; blank means `default`), `EMAIL_USER` / `EMAIL_PASS` (legacy only: monitored Gmail address and App Password), `TASK_MANAGER` (`google` or `todoist`), `TODOIST_API_TOKEN` (for Todoist), `GOOGLE_TASKLIST_NAME`, and `TODOIST_PROJECT_NAME` | No (gitignored) |
 | `.env.example` | Template showing required and optional environment variable names | Yes |
 | `users.example.json` | Template showing the `users.json` format (email and card-number keys, blank-name example) | Yes |
 | `credentials.json` | A "Desktop app" OAuth client: either shared privately by the project owner, or created by the user in their own Google Cloud project (steps in the README). Never commit it: GitHub push protection flags its client secret, and a public copy could be reused by others | No (gitignored) |
-| `token.json` | The user's personal Google sign-in (refresh token), auto-generated on first run by `get_google_credentials()` | No (gitignored) |
+| `token.json` | The user's personal Google sign-in (refresh token), auto-generated on first run by `get_google_credentials()`. With `SECRET_STORAGE=keychain` it lives in the OS keychain instead (an existing file is moved in once and deleted) | No (gitignored) |
 | `users.json` | Flat map of recipient email address (or, for shared addresses, library card number) → name. A blank name means the email itself is the label. Used to attribute every email to a family member | No (gitignored) |
 | `library_locations.json` | List of KCLS branch names and street addresses used to enrich hold tasks with branch addresses | Yes |
 | `library_records.jsonl` | Append-only event history (holds, checkouts, renewals, check-ins), one JSON object per line | No (gitignored) |

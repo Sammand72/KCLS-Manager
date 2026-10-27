@@ -245,29 +245,46 @@ def add_due_book_to_google(
 def update_due_book_google(
         book_title, account_user, due_datetime, service=None,
         target_list_id=None):
-    """Update the matching open Google Tasks due-date task."""
+    """Update the matching open Google Tasks due-date task.
+
+    A task for the same account user is preferred, but any task with a
+    matching title is used as a fallback. Renewal emails don't include a
+    card number, so the user often falls back to the shared email address,
+    which won't match the name the checkout receipt stored on the task.
+    """
     service, target_list_id = resolve_google_target(service, target_list_id)
 
+    title_matches = []
     for task in iter_open_google_tasks(service, target_list_id):
         task_title = strip_task_prefix(task['title'], DUE_TASK_TITLE_PREFIX)
         if task_title is None:
             continue
 
-        if not titles_match(
+        if titles_match(
                 checkout_title=task_title,
                 hold_title=book_title):
-            continue
-        if account_user != "Unknown user" and not users_match(
-                account_user, task.get('notes', '')):
-            continue
+            title_matches.append(task)
 
+    # next() returns the first task for this user, or None if there isn't one.
+    task_to_update = next(
+        (
+            task for task in title_matches
+            if users_match(account_user, task.get('notes', ''))
+        ),
+        None,
+    )
+    if task_to_update is None and title_matches:
+        task_to_update = title_matches[0]
+
+    if task_to_update is not None:
         service.tasks().patch(
             tasklist=target_list_id,
-            task=task['id'],
+            task=task_to_update['id'],
             body={'due': due_datetime.isoformat()},
         ).execute()
         TRACER_LOGGER.info(
-            "Updated due date for '%s' in Google Tasks", task['title'])
+            "Updated due date for '%s' in Google Tasks",
+            task_to_update['title'])
         return
 
     TRACER_LOGGER.info(

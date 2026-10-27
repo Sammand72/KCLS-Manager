@@ -5,6 +5,7 @@ import os
 
 from todoist_api_python.api import TodoistAPI
 
+from kcls_secrets import get_secret
 from kcls_task_matching import (
     DUE_TASK_TITLE_PREFIX,
     EXPIRED_TASK_TITLE_PREFIX,
@@ -26,8 +27,17 @@ def get_project_name():
 
 
 def authenticate_todoist():
-    """Create a Todoist API client using the token from the environment."""
-    token = os.getenv('TODOIST_API_TOKEN')
+    """Create a Todoist API client using the saved API token.
+
+    get_secret() reads it from .env or the OS keychain, depending on
+    SECRET_STORAGE.
+    """
+    token = get_secret('TODOIST_API_TOKEN').strip()
+    if not token:
+        raise RuntimeError(
+            "TODOIST_API_TOKEN is not set. Add it to .env, or with "
+            "SECRET_STORAGE=keychain run: python kcls_secrets.py set todoist-api"
+        )
     return TodoistAPI(token)
 
 
@@ -205,28 +215,44 @@ def add_due_book_to_todoist(
 def update_due_book_todoist(
         book_title, account_user, due_datetime, api=None,
         target_project_id=None):
-    """Update the matching open Todoist due-date task."""
+    """Update the matching open Todoist due-date task.
+
+    A task for the same account user is preferred, but any task with a
+    matching title is used as a fallback. Renewal emails don't include a
+    card number, so the user often falls back to the shared email address,
+    which won't match the name the checkout receipt stored on the task.
+    """
     api, target_project_id = resolve_todoist_target(api, target_project_id)
 
+    title_matches = []
     for task in iter_open_todoist_tasks(api, target_project_id):
         task_title = strip_task_prefix(task.content, DUE_TASK_TITLE_PREFIX)
         if task_title is None:
             continue
 
-        if not titles_match(
+        if titles_match(
                 checkout_title=task_title,
                 hold_title=book_title):
-            continue
-        if account_user != "Unknown user" and not users_match(
-                account_user, getattr(task, 'description', '')):
-            continue
+            title_matches.append(task)
 
+    # next() returns the first task for this user, or None if there isn't one.
+    task_to_update = next(
+        (
+            task for task in title_matches
+            if users_match(account_user, getattr(task, 'description', ''))
+        ),
+        None,
+    )
+    if task_to_update is None and title_matches:
+        task_to_update = title_matches[0]
+
+    if task_to_update is not None:
         api.update_task(
-            task.id,
+            task_to_update.id,
             due_date=due_datetime.date(),
         )
         TRACER_LOGGER.info(
-            "Updated due date for '%s' in Todoist", task.content)
+            "Updated due date for '%s' in Todoist", task_to_update.content)
         return
 
     TRACER_LOGGER.info(

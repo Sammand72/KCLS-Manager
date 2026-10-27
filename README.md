@@ -71,13 +71,14 @@ Note: On linux instead of pip you may use apt to install the underlying librarie
   "Forward" changes the sender, so the parser's `noreply@kcls.org` searches
   won't find it.
 * **.env**- settings for the script:
+  * **SECRET_STORAGE**- `file` (or blank) keeps secrets in `.env` and `token.json`. `keychain` keeps them in your OS keychain instead; see [Storing secrets in the OS keychain](#storing-secrets-in-the-os-keychain).
   * **EMAIL_LOGIN_TYPE**- `default` (or blank) opens a Google sign-in window on the first run. `legacy` logs in with `EMAIL_USER` and `EMAIL_PASS` (a Gmail App Password) instead.
   * **EMAIL_USER** / **EMAIL_PASS**- the monitored Gmail address and its App Password (only needed if `EMAIL_LOGIN_TYPE=legacy`)
   * **TASK_MANAGER**- set to `google` or `todoist` to choose which task manager holds get pushed to (defaults to `google` if unset)
   * **TODOIST_API_TOKEN**- your Todoist personal API token (only needed if `TASK_MANAGER=todoist`)
   * **GOOGLE_TASKLIST_NAME**- The name of the Google Tasks tasklist to push tasks to. If blank or unset, tasks go to Google's default tasklist.
   * **TODOIST_PROJECT_NAME**- The name of the Todoist Project to push tasks to. If blank or unset, tasks go to Todoist's Inbox.
-* (**token.json** is created automatically after you sign in. It is personal, so never share or commit it.)
+* (**token.json** is created automatically after you sign in. It is personal, so never share or commit it. With `SECRET_STORAGE=keychain` it is kept in the OS keychain instead.)
 * **library_locations.json**- contains the library branch names and addresses used for hold tasks. Each entry has a `name` and an `address` field.
 Add the credential and personal-data files to the `.gitignore`; keep the shared library location list available to the parser.
 
@@ -124,7 +125,37 @@ No extra API setup is needed; Google Tasks uses the sign-in described above. If 
 
 ### Todoist
 
-Get your API token from the Todoist app under Settings -> Integrations -> Developer, and put it in `.env` as `TODOIST_API_TOKEN`. No browser login step is needed.
+Get your API token from the Todoist app under Settings -> Integrations -> Developer, and put it in `.env` as `TODOIST_API_TOKEN` (or in the OS keychain, see below). No browser login step is needed.
+
+## Storing secrets in the OS keychain
+
+Instead of keeping your Todoist token, Gmail App Password, and Google sign-in in plain files, you can store them in your operating system's keychain: Windows Credential Manager, the macOS Keychain, or the Linux Secret Service (GNOME Keyring / KWallet).
+
+1. Set `SECRET_STORAGE=keychain` in `.env`.
+2. Save the secrets you use with the helper script (values are typed in hidden):
+
+   ```bash
+   python kcls_secrets.py set todoist-api      # TODOIST_API_TOKEN
+   python kcls_secrets.py set email-user   # only for EMAIL_LOGIN_TYPE=legacy
+   python kcls_secrets.py set email-pass   # only for EMAIL_LOGIN_TYPE=legacy
+   python kcls_secrets.py status           # shows what is saved, never the values
+   ```
+
+3. Remove `EMAIL_USER`, `EMAIL_PASS` and `TODOIST_API_TOKEN` from `.env`.
+
+The Google sign-in is handled for you. On the next run, an existing `token.json` is moved into the keychain and the file is deleted; new sign-ins are saved straight to the keychain. To force a fresh Google sign-in, run `python kcls_secrets.py delete google-token`. Everything is stored under the name `KCLS-manager`, so you can also find or remove the entries in your OS's password manager.
+
+**Scheduled runs need an unlocked keychain.** The keychain usually only becomes available once you log in, so a scheduled run that starts first waits for it, checking every 30 seconds for up to about 10 minutes. If you still haven't logged in by then, the run stops with a "Could not reach the OS keychain" log message. (A run you start by hand doesn't wait.)
+
+* **Windows:** run the Task Scheduler task as your own user.
+* **macOS:** works while you are logged in.
+* **Linux:** cron jobs don't know where your desktop session is, so add `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus` before the Python command in your crontab line (replace `1000` with the number `id -u` prints):
+
+  ```bash
+  @reboot sleep 60 && DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus /path/to/KCLS-manager/.venv/bin/python /path/to/KCLS-manager/kcls_parser.py >/dev/null 2>>/path/to/KCLS-manager/library_crash.log
+  ```
+
+  On a headless Linux machine with nobody logging in, keep `SECRET_STORAGE=file`.
 
 ## Scheduling
 

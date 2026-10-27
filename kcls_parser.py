@@ -15,7 +15,17 @@ import dateparser
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-from kcls_google_auth import get_google_credentials, get_google_email
+from kcls_google_auth import (
+    get_google_credentials,
+    get_google_email,
+    is_interactive,
+)
+from kcls_secrets import (
+    get_secret,
+    get_secret_storage,
+    validate_secret_storage,
+    wait_for_keychain,
+)
 from kcls_tasker_gtasks import (
     add_due_book_to_google,
     add_hold_to_google,
@@ -1021,6 +1031,26 @@ def main():
     get_tracer_logger().info("Selected email login type: %s", email_login_type)
     validate_email_login_type(email_login_type)
 
+    secret_storage = get_secret_storage()
+    get_tracer_logger().info("Selected secret storage: %s", secret_storage)
+    validate_secret_storage(secret_storage)
+
+    if secret_storage == 'keychain':
+        # A scheduled run right after boot may start before you log in, and
+        # the keychain only unlocks at login, so wait for it. When you run
+        # the script by hand you're already logged in, so only try once.
+        if is_interactive():
+            keychain_attempts = 1
+        else:
+            keychain_attempts = 20
+        try:
+            wait_for_keychain(max_attempts=keychain_attempts)
+        except Exception:  # noqa: BLE001
+            get_tracer_logger().exception(
+                "Could not reach the OS keychain. Exiting script.")
+            close_logging()
+            return
+
     user_mapping = load_user_mapping(json_path)
     location_addresses = load_location_addresses(locations_path)
 
@@ -1031,12 +1061,26 @@ def main():
     if email_login_type == 'legacy':
         # Check the login details before connecting. Without this, a missing
         # value reaches imaplib as None and crashes with a confusing TypeError.
-        email_user = os.getenv('EMAIL_USER', '').strip()
-        email_pass = os.getenv('EMAIL_PASS', '')
+        # get_secret() reads them from .env or the OS keychain, depending on
+        # SECRET_STORAGE.
+        try:
+            email_user = get_secret('EMAIL_USER').strip()
+            email_pass = get_secret('EMAIL_PASS')
+        except Exception:  # noqa: BLE001
+            get_tracer_logger().exception(
+                "Could not read the Gmail login details. Exiting script.")
+            close_logging()
+            return
         if not email_user or not email_pass:
+            if secret_storage == 'keychain':
+                where = ("the OS keychain (run: python kcls_secrets.py set "
+                         "email-user, then email-pass)")
+            else:
+                where = ".env"
             get_tracer_logger().error(
-                "EMAIL_USER and EMAIL_PASS must both be set in .env "
-                "when EMAIL_LOGIN_TYPE=legacy. Exiting script."
+                "EMAIL_USER and EMAIL_PASS must both be set in %s "
+                "when EMAIL_LOGIN_TYPE=legacy. Exiting script.",
+                where,
             )
             close_logging()
             return

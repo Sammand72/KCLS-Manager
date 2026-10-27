@@ -5,7 +5,8 @@
 # Google Cloud project. The OAuth client in credentials.json either comes
 # privately from the project owner or from the user's own Google Cloud project
 # (see the README). It is gitignored so bots scanning GitHub can't reuse it. The personal part,
-# token.json, stays on the user's machine and is gitignored too.
+# token.json, stays on the user's machine and is gitignored too. With
+# SECRET_STORAGE=keychain it is kept in the OS keychain instead of a file.
 
 import json
 import logging
@@ -16,6 +17,8 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+
+from kcls_secrets import get_secret, get_secret_storage, set_secret
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -46,7 +49,8 @@ def raise_non_interactive_auth_error(cause=None):
     """Explain how to complete Google sign-in when no browser is available."""
     message = (
         "Google sign-in needs an interactive browser login. "
-        "Run the script manually once to create or refresh token.json before "
+        "Run the script manually once to create or refresh the saved sign-in "
+        "(token.json, or the OS keychain with SECRET_STORAGE=keychain) before "
         "running it from cron or Task Scheduler."
     )
     if cause is not None:
@@ -71,7 +75,10 @@ def has_all_scopes(creds, needed_scopes):
 
 
 def save_credentials(creds, token_path):
-    """Write the credentials to token.json so later runs skip the browser."""
+    """Save the credentials so later runs skip the browser.
+
+    They go to token.json, or to the OS keychain with SECRET_STORAGE=keychain.
+    """
     creds_data = {
         'token': creds.token,
         'refresh_token': creds.refresh_token,
@@ -81,8 +88,51 @@ def save_credentials(creds, token_path):
         'scopes': creds.scopes
     }
 
+    if get_secret_storage() == 'keychain':
+        # The keychain stores text, so turn the dict into a JSON string.
+        set_secret('GOOGLE_TOKEN', json.dumps(creds_data))
+        return
+
     with open(token_path, 'w') as token:
         json.dump(creds_data, token)
+
+
+def move_token_file_to_keychain(token_path):
+    """Copy an old token.json into the keychain, then delete the file.
+
+    This runs once, the first time SECRET_STORAGE=keychain is used, so the
+    user doesn't have to sign in again.
+    """
+    with open(token_path) as token_file:
+        token_text = token_file.read()
+    set_secret('GOOGLE_TOKEN', token_text)
+
+    # Only delete the file once we know the keychain really kept a copy.
+    if get_secret('GOOGLE_TOKEN') != token_text:
+        TRACER_LOGGER.warning(
+            "Could not confirm token.json was saved in the keychain, "
+            "so the file was kept.")
+        return token_text
+
+    os.remove(token_path)
+    TRACER_LOGGER.info("Moved token.json into the OS keychain.")
+    return token_text
+
+
+def load_saved_credentials(token_path):
+    """Load the saved Google sign-in, or return None if there isn't one."""
+    if get_secret_storage() != 'keychain':
+        if os.path.exists(token_path):
+            return Credentials.from_authorized_user_file(token_path)
+        return None
+
+    token_text = get_secret('GOOGLE_TOKEN')
+    if not token_text and os.path.exists(token_path):
+        token_text = move_token_file_to_keychain(token_path)
+    if not token_text:
+        return None
+    # json.loads turns the saved text back into a dict.
+    return Credentials.from_authorized_user_info(json.loads(token_text))
 
 
 def get_google_credentials(include_gmail=True, include_tasks=False):
@@ -93,26 +143,24 @@ def get_google_credentials(include_gmail=True, include_tasks=False):
     """
     needed_scopes = build_scope_list(include_gmail, include_tasks)
     token_path = get_token_file_path()
-    creds = None
 
-    # check if we already logged in (saved in token.json).
+    # check if we already logged in (saved in token.json or the keychain).
     # No scopes are passed here, so creds.scopes are the ones actually saved.
-    if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path)
+    creds = load_saved_credentials(token_path)
 
-        # An older token.json (for example one made before Gmail sign-in
-        # existed) may be missing a permission we now need. Signing in again
-        # is the only way to add it.
-        if not has_all_scopes(creds, needed_scopes):
-            TRACER_LOGGER.info(
-                "Saved Google sign-in is missing a permission- please sign in again to grant it. "
-                "Running in a private window/ incognito mode may fix unspecified errors. ")
-            # Keep any permissions the old token already had, so switching
-            # settings later doesn't force yet another sign-in.
-            for scope in creds.scopes or []:
-                if scope not in needed_scopes:
-                    needed_scopes.append(scope)
-            creds = None
+    # An older token.json (for example one made before Gmail sign-in
+    # existed) may be missing a permission we now need. Signing in again
+    # is the only way to add it.
+    if creds is not None and not has_all_scopes(creds, needed_scopes):
+        TRACER_LOGGER.info(
+            "Saved Google sign-in is missing a permission- please sign in again to grant it. "
+            "Running in a private window/ incognito mode may fix unspecified errors. ")
+        # Keep any permissions the old token already had, so switching
+        # settings later doesn't force yet another sign-in.
+        for scope in creds.scopes or []:
+            if scope not in needed_scopes:
+                needed_scopes.append(scope)
+        creds = None
 
     if creds and creds.valid:
         return creds

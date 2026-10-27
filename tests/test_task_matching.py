@@ -34,6 +34,7 @@ from kcls_tasker_gtasks import (
 from kcls_tasker_todoist import (
     add_due_book_to_todoist,
     add_hold_to_todoist,
+    authenticate_todoist,
     complete_due_book_todoist,
     expire_hold_todoist,
     get_project_id,
@@ -460,6 +461,48 @@ class TaskMatchingBackendTests(unittest.TestCase):
         self.assertEqual(updates[0][0], ("right-user",))
         self.assertEqual(updates[0][1]["due_date"].isoformat(), "2026-10-15")
 
+    def test_todoist_renewal_falls_back_when_user_is_email_address(self):
+        # Renewal emails have no card number, so the user is the shared
+        # email address, while the checkout receipt stored the real name.
+        from datetime import datetime
+
+        tasks = [
+            SimpleNamespace(
+                id="due",
+                content="KCLS book due: Sleepless",
+                description="Author: Korman, Gordon\nAccount: Samarth",
+            ),
+        ]
+        updates = []
+        api = SimpleNamespace(
+            get_tasks=lambda project_id: [tasks],
+            update_task=lambda *args, **kwargs: updates.append((args, kwargs)),
+        )
+
+        update_due_book_todoist(
+            "Sleepless", "family@example.com", datetime(2026, 11, 19),
+            api=api, target_project_id="project")
+
+        self.assertEqual(updates[0][0], ("due",))
+
+    def test_google_renewal_falls_back_when_user_is_email_address(self):
+        from datetime import datetime
+
+        tasks = [
+            {
+                "id": "due",
+                "title": "KCLS book due: Sleepless",
+                "notes": "Author: Korman, Gordon\nAccount: Samarth",
+            },
+        ]
+        service = FakeGoogleService(tasks)
+
+        update_due_book_google(
+            "Sleepless", "family@example.com", datetime(2026, 11, 19),
+            service=service, target_list_id="list")
+
+        self.assertEqual(service.task_api.updated[0]["task"], "due")
+
     def test_google_checkin_completes_matching_due_task_only(self):
         tasks = [
             {
@@ -664,6 +707,16 @@ class TaskMatchingBackendTests(unittest.TestCase):
             mark_hold_complete_todoist("Little Women", "Sam")
 
         self.assertEqual(completed, ["right-user"])
+
+    def test_missing_todoist_token_gives_clear_error(self):
+        with (
+            patch.dict(os.environ, {
+                "SECRET_STORAGE": "file",
+                "TODOIST_API_TOKEN": " ",
+            }),
+            self.assertRaisesRegex(RuntimeError, "TODOIST_API_TOKEN is not set"),
+        ):
+            authenticate_todoist()
 
     def make_message(self, body, subject="Test KCLS email"):
         message = EmailMessage()

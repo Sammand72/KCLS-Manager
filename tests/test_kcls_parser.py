@@ -713,6 +713,71 @@ Author:
         close_logging_mock.assert_called_once()
         logger_mock.return_value.error.assert_called_once()
 
+    def test_main_legacy_login_reads_keychain_when_selected(self):
+        mail = SimpleNamespace(
+            select=Mock(return_value=("NO", [b"stop here"])),
+            logout=Mock(),
+        )
+        keychain = {
+            "EMAIL_USER": "someone@example.com",
+            "EMAIL_PASS": "keychain password",
+        }
+
+        with (
+            patch.dict("os.environ", {
+                "TASK_MANAGER": "google",
+                "EMAIL_LOGIN_TYPE": "legacy",
+                "SECRET_STORAGE": "keychain",
+                "EMAIL_USER": "",
+                "EMAIL_PASS": "",
+            }),
+            patch(
+                "kcls_secrets.keyring.get_password",
+                side_effect=lambda service, name: keychain.get(name),
+            ),
+            patch("kcls_parser.wait_for_keychain"),
+            patch("kcls_parser.load_dotenv"),
+            patch("kcls_parser.configure_logging"),
+            patch("kcls_parser.close_logging"),
+            patch("kcls_parser.connect_to_gmail", return_value=mail),
+            patch("kcls_parser.login_to_gmail") as password_login_mock,
+            patch("kcls_parser.load_user_mapping", return_value={}),
+            patch("kcls_parser.load_location_addresses", return_value={}),
+            patch("kcls_parser.get_tracer_logger"),
+        ):
+            main()
+
+        password_login_mock.assert_called_once_with(
+            mail, "someone@example.com", "keychain password")
+
+    def test_main_stops_when_keychain_never_becomes_available(self):
+        with (
+            patch.dict("os.environ", {
+                "TASK_MANAGER": "todoist",
+                "EMAIL_LOGIN_TYPE": "default",
+                "SECRET_STORAGE": "keychain",
+            }),
+            patch("kcls_parser.load_dotenv"),
+            patch("kcls_parser.configure_logging"),
+            patch("kcls_parser.close_logging") as close_logging_mock,
+            patch("kcls_parser.is_interactive", return_value=False),
+            patch(
+                "kcls_parser.wait_for_keychain",
+                side_effect=RuntimeError("no keychain"),
+            ) as wait_mock,
+            patch("kcls_parser.get_google_credentials") as sign_in_mock,
+            patch("kcls_parser.connect_to_gmail") as connect_mock,
+            patch("kcls_parser.get_tracer_logger") as logger_mock,
+        ):
+            main()
+
+        # Scheduled (non-interactive) runs wait through several attempts.
+        wait_mock.assert_called_once_with(max_attempts=20)
+        sign_in_mock.assert_not_called()
+        connect_mock.assert_not_called()
+        close_logging_mock.assert_called_once()
+        logger_mock.return_value.exception.assert_called_once()
+
     def test_main_stops_when_inbox_cannot_be_opened(self):
         mail = SimpleNamespace(
             select=Mock(return_value=("NO", [b"mailbox missing"])),
