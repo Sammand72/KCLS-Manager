@@ -1,0 +1,6 @@
+kcls_google_auth
+kcls_parser
+kcls_secrets
+kcls_task_matching
+kcls_tasker_gtasks
+kcls_tasker_todoist

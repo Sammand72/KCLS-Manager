@@ -49,7 +49,10 @@ from kcls_tasker_todoist import (
     update_due_book_todoist,
 )
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
+# This file lives in src/, but settings and data files (.env, token.json,
+# users.json, logs, ...) stay in the main project folder one level up.
+# dirname() twice: src/kcls_x.py -> src/ -> project folder.
+project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # These labels help tell an empty value apart from the next label.
@@ -87,6 +90,14 @@ def configure_logging(log_directory):
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(tracer_formatter)
         tracer_logger.addHandler(console_handler)
+    else:
+        # Not in a terminal (e.g. run by cron). Errors are caught and logged
+        # rather than crashing, so Python never prints them to stderr on its
+        # own. Copy ERROR messages there so a crontab "2>>crash.log" sees them.
+        error_handler = logging.StreamHandler(sys.stderr)
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(tracer_formatter)
+        tracer_logger.addHandler(error_handler)
 
     record_handler = logging.FileHandler(
         os.path.join(log_directory, "library_records.jsonl"),
@@ -1012,15 +1023,15 @@ def process_checkin_emails(
 def main():
     """Run the email scanner from start to finish."""
     today = datetime.now().astimezone()
-    configure_logging(script_dir)
+    configure_logging(project_dir)
     get_tracer_logger().info(
         "\n\nStarting on %s",
         today.strftime('%A, %B %d, %Y at %I:%M %p'),
     )
 
-    env_path = os.path.join(script_dir, '.env')
-    json_path = os.path.join(script_dir, 'users.json')
-    locations_path = os.path.join(script_dir, 'library_locations.json')
+    env_path = os.path.join(project_dir, '.env')
+    json_path = os.path.join(project_dir, 'users.json')
+    locations_path = os.path.join(project_dir, 'library_locations.json')
 
     load_dotenv(dotenv_path=env_path)
     task_manager = os.getenv('TASK_MANAGER', 'google').strip().lower()

@@ -36,10 +36,10 @@ class GoogleAuthTests(unittest.TestCase):
         # Every test gets its own empty folder, so no real token.json is used.
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        script_dir_patch = patch(
-            "kcls_google_auth.script_dir", self.directory.name)
-        script_dir_patch.start()
-        self.addCleanup(script_dir_patch.stop)
+        project_dir_patch = patch(
+            "kcls_google_auth.project_dir", self.directory.name)
+        project_dir_patch.start()
+        self.addCleanup(project_dir_patch.stop)
         # Default to file mode, even if the real .env says keychain.
         env_patch = patch.dict("os.environ", {"SECRET_STORAGE": ""})
         env_patch.start()

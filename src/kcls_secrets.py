@@ -23,7 +23,10 @@ import keyring
 from dotenv import load_dotenv
 from keyring.errors import PasswordDeleteError
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
+# This file lives in src/, but settings and data files (.env, token.json,
+# users.json, logs, ...) stay in the main project folder one level up.
+# dirname() twice: src/kcls_x.py -> src/ -> project folder.
+project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Every keychain entry is saved under this "service" name, so they are easy
 # to find (and tell apart from other apps) in the OS's password manager.
@@ -210,7 +213,7 @@ def build_argument_parser():
 def main(argv=None):
     """Run the set / delete / status commands."""
     # Load .env only so "status" can say which SECRET_STORAGE is selected.
-    load_dotenv(dotenv_path=os.path.join(script_dir, '.env'))
+    load_dotenv(dotenv_path=os.path.join(project_dir, '.env'))
     args = build_argument_parser().parse_args(argv)
 
     if args.command == 'status':

@@ -16,14 +16,14 @@ The owner is learning Python with this project. Favor the codebase's existing pl
 
 ## Architecture
 
-Six core Python modules plus the test suite:
+Six core Python modules in [src/](src/), plus the test suite. Config and data files (`.env`, `credentials.json`, `token.json`, `users.json`, `library_locations.json`, logs) stay in the project root; each module finds them through its `project_dir` variable (the folder above `src/`).
 
-- [kcls_parser.py](kcls_parser.py) — Main entrypoint. Connects to Gmail over IMAP, searches the inbox for unread KCLS emails (holds, checkout receipts, renewals, check-ins), parses message bodies into structured records, updates/creates tasks, logs library events to `library_records.jsonl`, and marks emails as read.
-- [kcls_google_auth.py](kcls_google_auth.py) — Shared Google sign-in. `get_google_credentials(include_gmail, include_tasks)` loads/refreshes `token.json` or opens the browser OAuth flow using `credentials.json`, re-asking when a saved token lacks a needed scope. `get_google_email()` reads the signed-in address for IMAP XOAUTH2 login.
-- [kcls_secrets.py](kcls_secrets.py) — Secret storage. `get_secret(name)` reads `TODOIST_API_TOKEN`, `EMAIL_USER`, `EMAIL_PASS` from `.env` (`SECRET_STORAGE=file`, the default) or from the OS keychain via the `keyring` library (`SECRET_STORAGE=keychain`, service name `KCLS-manager`). Also holds the Google token as `GOOGLE_TOKEN` in keychain mode. Run directly (`python kcls_secrets.py set|delete|status`) to manage keychain entries.
-- [kcls_tasker_gtasks.py](kcls_tasker_gtasks.py) — Google Tasks integration. Builds the Tasks API client from shared Google credentials, resolves the target tasklist by name (`GOOGLE_TASKLIST_NAME`), inserts hold and due tasks, renames expired holds, updates renewed due dates, and marks completed tasks.
-- [kcls_tasker_todoist.py](kcls_tasker_todoist.py) — Todoist integration. Authenticates with a static API token (`TODOIST_API_TOKEN`), resolves the target project by name (`TODOIST_PROJECT_NAME`), inserts hold and due tasks, renames expired holds, updates renewed due dates, and marks completed tasks.
-- [kcls_task_matching.py](kcls_task_matching.py) — Shared title and user normalization and matching logic. Handles substring matching for truncated KCLS titles (requiring >= 10 characters) and validates account user attribution.
+- [src/kcls_parser.py](src/kcls_parser.py) — Main entrypoint. Connects to Gmail over IMAP, searches the inbox for unread KCLS emails (holds, checkout receipts, renewals, check-ins), parses message bodies into structured records, updates/creates tasks, logs library events to `library_records.jsonl`, and marks emails as read.
+- [src/kcls_google_auth.py](src/kcls_google_auth.py) — Shared Google sign-in. `get_google_credentials(include_gmail, include_tasks)` loads/refreshes `token.json` or opens the browser OAuth flow using `credentials.json`, re-asking when a saved token lacks a needed scope. `get_google_email()` reads the signed-in address for IMAP XOAUTH2 login.
+- [src/kcls_secrets.py](src/kcls_secrets.py) — Secret storage. `get_secret(name)` reads `TODOIST_API_TOKEN`, `EMAIL_USER`, `EMAIL_PASS` from `.env` (`SECRET_STORAGE=file`, the default) or from the OS keychain via the `keyring` library (`SECRET_STORAGE=keychain`, service name `KCLS-manager`). Also holds the Google token as `GOOGLE_TOKEN` in keychain mode. Run directly (`python src/kcls_secrets.py set|delete|status`) to manage keychain entries.
+- [src/kcls_tasker_gtasks.py](src/kcls_tasker_gtasks.py) — Google Tasks integration. Builds the Tasks API client from shared Google credentials, resolves the target tasklist by name (`GOOGLE_TASKLIST_NAME`), inserts hold and due tasks, renames expired holds, updates renewed due dates, and marks completed tasks.
+- [src/kcls_tasker_todoist.py](src/kcls_tasker_todoist.py) — Todoist integration. Authenticates with a static API token (`TODOIST_API_TOKEN`), resolves the target project by name (`TODOIST_PROJECT_NAME`), inserts hold and due tasks, renames expired holds, updates renewed due dates, and marks completed tasks.
+- [src/kcls_task_matching.py](src/kcls_task_matching.py) — Shared title and user normalization and matching logic. Handles substring matching for truncated KCLS titles (requiring >= 10 characters) and validates account user attribution.
 - [tests/](tests/) — Unit test suite with offline mocks:
   - `tests/test_kcls_parser.py` — Tests IMAP connection retry/fail logic, logging, location address loading, and body parsing for all email types.
   - `tests/test_task_matching.py` — Tests title/user normalization and task-matching logic across task managers.
@@ -50,12 +50,13 @@ Keep real secrets and personal data out of any committed files or templates.
 
 ## Running and testing
 
-Dependencies are pinned in [requirements.txt](requirements.txt) (generated via `pip freeze`) and installed into a `.venv`:
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). [pyproject.toml](pyproject.toml) lists only the packages the code imports directly (plus `ruff` in the `dev` dependency group); [uv.lock](uv.lock) pins every package, including the ones pulled in by others, for all platforms. [.python-version](.python-version) pins Python 3.12. Install everything into `.venv` with:
 
 ```bash
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
+
+Use `uv add` / `uv remove` to change dependencies (never `pip install` into the `.venv`, since `uv sync` removes anything not in the lockfile), and commit `pyproject.toml` and `uv.lock` together. Run commands with `uv run ...` so they always use the project's `.venv`. `uv sync` also installs `src/` into `.venv` in editable mode (setuptools `package-dir` + `py-modules` in `pyproject.toml`), which is how the tests can `import kcls_parser`; a new module in `src/` must be added to `py-modules`. Scheduled runs (cron / Task Scheduler) call `.venv/bin/python` directly and don't need uv.
 
 When the interpreter "can't find" an installed package, verify whether the shell or editor is pointed at the `.venv` rather than system Python.
 
@@ -64,7 +65,7 @@ When the interpreter "can't find" an installed package, verify whether the shell
 All tests run offline without connecting to Gmail or external APIs:
 
 ```bash
-python -m unittest discover -s tests
+uv run python -m unittest discover -s tests
 ```
 
 ### Linting and formatting
@@ -72,7 +73,7 @@ python -m unittest discover -s tests
 Use `ruff` for linting and formatting:
 
 ```bash
-ruff check .
+uv run ruff check .
 ```
 
 ### First run setup

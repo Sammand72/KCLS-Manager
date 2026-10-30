@@ -1,0 +1,47 @@
+# Project settings read by uv (and other Python tools such as ruff).
+# Only the packages our code imports directly are listed here. uv works out
+# everything *they* need and pins the exact versions of all of it in uv.lock,
+# so this file stays short and readable.
+[project]
+name = "kcls-manager"
+version = "0.1.0"
+description = "Turns King County Library System emails into Google Tasks or Todoist tasks."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "dateparser>=1.4.2",
+    "google-api-python-client>=2.198.0",
+    "google-auth>=2.56.3",
+    "google-auth-oauthlib>=1.4.0",
+    "keyring>=25.7.0",
+    "python-dotenv>=1.2.2",
+    "todoist-api-python>=4.0.0",
+]
+
+# Tools used while developing, not needed to run the script.
+# `uv sync` installs these too, so everyone gets the same ruff version.
+[dependency-groups]
+dev = [
+    "ruff>=0.17.0",
+]
+
+# The code lives in src/. `uv sync` installs it into .venv in "editable" mode:
+# instead of copying the files, it just adds src/ to Python's search path.
+# That lets the tests (and VS Code) `import kcls_parser` from anywhere, and
+# edits to src/ take effect immediately with no reinstall.
+# setuptools is only used for that install step; it is not needed at runtime.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = [
+    "kcls_google_auth",
+    "kcls_parser",
+    "kcls_secrets",
+    "kcls_task_matching",
+    "kcls_tasker_gtasks",
+    "kcls_tasker_todoist",
+]

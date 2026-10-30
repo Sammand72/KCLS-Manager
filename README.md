@@ -32,25 +32,45 @@ Hold completion normalizes titles by lowercasing, removing punctuation (includin
 
 ## Dependencies
 
-You will need Python 3.11 or newer installed. It's recommended to use a virtual environment so these packages stay separate from your system Python:
+This project uses [uv](https://docs.astral.sh/uv/) to manage Python and its packages. Install uv first ([other install options](https://docs.astral.sh/uv/getting-started/installation/)):
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate   # on Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+curl -LsSf https://astral.sh/uv/install.sh | sh                        # Linux / macOS
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"   # Windows
+```
+
+Then, from the project folder:
+
+```bash
+uv sync
+```
+
+That one command creates a `.venv` virtual environment (downloading Python 3.12 if you don't have it) and installs the exact package versions recorded in `uv.lock`. Run it again whenever `pyproject.toml` or `uv.lock` changes.
+
+To run anything inside that environment, put `uv run` in front of it (no need to activate the venv):
+
+```bash
+uv run src/kcls_parser.py
 ```
 
 Remember to select the `.venv` interpreter in your editor too (in VS Code: Ctrl+Shift+P -> "Python: Select Interpreter"), otherwise it won't recognize the installed packages even though they're there.
+
+### Adding or upgrading packages
+
+* `uv add some-package` adds a package to `pyproject.toml` and `uv.lock` and installs it.
+* `uv remove some-package` takes it out again.
+* `uv lock --upgrade` moves every package to its newest allowed version (then run the tests).
+
+Commit `pyproject.toml` and `uv.lock` together. Don't use `pip install` inside the `.venv`, since uv won't know about it and the next `uv sync` removes it.
 
 ### Running the tests
 
 The parser tests do not connect to Gmail or either task manager:
 
 ```bash
-.venv/bin/python -m unittest discover -s tests
+uv run python -m unittest discover -s tests
+uv run ruff check .
 ```
-
-Note: On linux instead of pip you may use apt to install the underlying libraries system-wide, but that won't work inside a venv.
 
 ### Other files
 
@@ -113,7 +133,7 @@ If you can't get `credentials.json` from the project owner, you can make your ow
    * `https://www.googleapis.com/auth/tasks`
 5. Under **Audience**, click **Publish app** so the status is **In production**. In "Testing" status, the sign-in expires every 7 days and scheduled runs start failing.
 6. Under **Clients**, click **Create client**, choose application type **Desktop app**, and create it.
-7. Click the download button for the new client, rename the downloaded file to `credentials.json`, and put it in the same folder as `kcls_parser.py`.
+7. Click the download button for the new client, rename the downloaded file to `credentials.json`, and put it in the main project folder (next to `pyproject.toml`, not inside `src/`).
 
 Never commit or share `credentials.json` publicly. It is already in `.gitignore`.
 
@@ -135,15 +155,15 @@ Instead of keeping your Todoist token, Gmail App Password, and Google sign-in in
 2. Save the secrets you use with the helper script (values are typed in hidden):
 
    ```bash
-   python kcls_secrets.py set todoist-api      # TODOIST_API_TOKEN
-   python kcls_secrets.py set email-user   # only for EMAIL_LOGIN_TYPE=legacy
-   python kcls_secrets.py set email-pass   # only for EMAIL_LOGIN_TYPE=legacy
-   python kcls_secrets.py status           # shows what is saved, never the values
+   python src/kcls_secrets.py set todoist-api      # TODOIST_API_TOKEN
+   python src/kcls_secrets.py set email-user   # only for EMAIL_LOGIN_TYPE=legacy
+   python src/kcls_secrets.py set email-pass   # only for EMAIL_LOGIN_TYPE=legacy
+   python src/kcls_secrets.py status           # shows what is saved, never the values
    ```
 
 3. Remove `EMAIL_USER`, `EMAIL_PASS` and `TODOIST_API_TOKEN` from `.env`.
 
-The Google sign-in is handled for you. On the next run, an existing `token.json` is moved into the keychain and the file is deleted; new sign-ins are saved straight to the keychain. To force a fresh Google sign-in, run `python kcls_secrets.py delete google-token`. Everything is stored under the name `KCLS-manager`, so you can also find or remove the entries in your OS's password manager.
+The Google sign-in is handled for you. On the next run, an existing `token.json` is moved into the keychain and the file is deleted; new sign-ins are saved straight to the keychain. To force a fresh Google sign-in, run `python src/kcls_secrets.py delete google-token`. Everything is stored under the name `KCLS-manager`, so you can also find or remove the entries in your OS's password manager.
 
 **Scheduled runs need an unlocked keychain.** The keychain usually only becomes available once you log in, so a scheduled run that starts first waits for it, checking every 30 seconds for up to about 10 minutes. If you still haven't logged in by then, the run stops with a "Could not reach the OS keychain" log message. (A run you start by hand doesn't wait.)
 
@@ -152,7 +172,7 @@ The Google sign-in is handled for you. On the next run, an existing `token.json`
 * **Linux:** cron jobs don't know where your desktop session is, so add `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus` before the Python command in your crontab line (replace `1000` with the number `id -u` prints):
 
   ```bash
-  @reboot sleep 60 && DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus /path/to/KCLS-manager/.venv/bin/python /path/to/KCLS-manager/kcls_parser.py >/dev/null 2>>/path/to/KCLS-manager/library_crash.log
+  @reboot sleep 60 && DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus /path/to/KCLS-manager/.venv/bin/python /path/to/KCLS-manager/src/kcls_parser.py >/dev/null 2>>/path/to/KCLS-manager/library_crash.log
   ```
 
   On a headless Linux machine with nobody logging in, keep `SECRET_STORAGE=file`.
@@ -174,7 +194,7 @@ Open Task Scheduler and click **Create Task** (do not select Basic Task).
 * **Add arguments:**
 
 ```cmd
-/c "C:\route\to\KCLS-manager\.venv\Scripts\python.exe C:\route\to\KCLS-manager\kcls_parser.py > NUL 2>> C:\route\to\KCLS-manager\library_crash.log"
+/c "C:\route\to\KCLS-manager\.venv\Scripts\python.exe C:\route\to\KCLS-manager\src\kcls_parser.py > NUL 2>> C:\route\to\KCLS-manager\library_crash.log"
 
 ```
 
@@ -193,7 +213,7 @@ crontab -e
 This will open the crontab config file in your distro's text editor. The config contains a lot of info on crontab scheduling. At the bottom of the file, add your schedule. An example schedule is:
 
 ```bash
-@reboot sleep 60 && /path/to/KCLS-manager/.venv/bin/python /path/to/KCLS-manager/kcls_parser.py >/dev/null 2>>/path/to/KCLS-manager/library_crash.log
+@reboot sleep 60 && /path/to/KCLS-manager/.venv/bin/python /path/to/KCLS-manager/src/kcls_parser.py >/dev/null 2>>/path/to/KCLS-manager/library_crash.log
 ```
 
 This example runs the script 1 minute after every startup or reboot. Any regular output is discarded and errors (`2`) are output into `library_crash.log`.

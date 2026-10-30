@@ -20,7 +20,10 @@ from googleapiclient.discovery import build
 
 from kcls_secrets import get_secret, get_secret_storage, set_secret
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
+# This file lives in src/, but settings and data files (.env, token.json,
+# users.json, logs, ...) stay in the main project folder one level up.
+# dirname() twice: src/kcls_x.py -> src/ -> project folder.
+project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Permissions ("scopes") we can ask Google for.
 # Gmail's IMAP server only accepts the full-mail scope.
@@ -32,12 +35,12 @@ TRACER_LOGGER = logging.getLogger("kcls.tracer")
 
 def get_client_file_path():
     """Path to the Google OAuth client file (credentials.json)."""
-    return os.path.join(script_dir, 'credentials.json')
+    return os.path.join(project_dir, 'credentials.json')
 
 
 def get_token_file_path():
     """Path to this user's saved sign-in (created after the first login)."""
-    return os.path.join(script_dir, 'token.json')
+    return os.path.join(project_dir, 'token.json')
 
 
 def is_interactive():
