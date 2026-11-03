@@ -10,6 +10,7 @@ from kcls_parser import (
     process_checkin_emails,
     process_due_date_emails,
     process_hold_emails,
+    process_overdue_emails,
     process_receipt_emails,
 )
 from kcls_task_matching import (
@@ -17,6 +18,7 @@ from kcls_task_matching import (
     build_hold_notes,
     extract_task_user,
     is_same_task,
+    strip_due_task_prefix,
     strip_task_prefix,
     titles_match,
     users_match,
@@ -28,6 +30,7 @@ from kcls_tasker_gtasks import (
     expire_hold_google,
     get_tasklist_id,
     get_tasklist_name,
+    mark_due_book_overdue_google,
     mark_hold_complete_google,
     update_due_book_google,
 )
@@ -39,6 +42,7 @@ from kcls_tasker_todoist import (
     expire_hold_todoist,
     get_project_id,
     get_project_name,
+    mark_due_book_overdue_todoist,
     mark_hold_complete_todoist,
     update_due_book_todoist,
 )
@@ -109,6 +113,13 @@ class MatcherTests(unittest.TestCase):
         # Expired pickups have their own prefix and must not count as pickups.
         self.assertIsNone(strip_task_prefix(
             "EXPIRED KCLS book pickup: A Book", TASK_TITLE_PREFIX))
+
+    def test_strip_due_task_prefix_accepts_normal_and_overdue(self):
+        self.assertEqual(
+            strip_due_task_prefix("KCLS book due: A Book"), "A Book")
+        self.assertEqual(
+            strip_due_task_prefix("OVERDUE KCLS book due: A Book"), "A Book")
+        self.assertIsNone(strip_due_task_prefix("KCLS book pickup: A Book"))
 
     def test_hold_notes_account_line_can_be_read_back(self):
         notes = build_hold_notes(
@@ -331,6 +342,186 @@ class TaskMatchingBackendTests(unittest.TestCase):
         self.assertEqual(
             service.task_api.updated[0]["body"]["title"],
             "EXPIRED KCLS book pickup: A Book",
+        )
+
+    def test_google_overdue_renames_matching_due_task(self):
+        service = FakeGoogleService([
+            {
+                "id": "pickup",
+                "title": "KCLS book pickup: The Demigod Diaries",
+                "notes": "Account: Sam",
+            },
+            {
+                "id": "due",
+                "title": "KCLS book due: The Demigod Diaries",
+                "notes": "Author: Riordan, Rick.\nAccount: Sam",
+            },
+        ])
+
+        mark_due_book_overdue_google(
+            "The Demigod Diaries", "Riordan, Rick.", "Sam",
+            datetime(2026, 10, 22, tzinfo=UTC),
+            service=service, target_list_id="list")
+
+        self.assertEqual(len(service.task_api.updated), 1)
+        self.assertEqual(service.task_api.updated[0]["task"], "due")
+        self.assertEqual(
+            service.task_api.updated[0]["body"],
+            {"title": "OVERDUE KCLS book due: The Demigod Diaries"},
+        )
+        self.assertFalse(hasattr(service.task_api, "inserted"))
+
+    def test_google_overdue_twice_does_not_rename_or_add_again(self):
+        service = FakeGoogleService([{
+            "id": "due",
+            "title": "OVERDUE KCLS book due: The Demigod Diaries",
+            "notes": "Account: Sam",
+        }])
+
+        mark_due_book_overdue_google(
+            "The Demigod Diaries", "Riordan, Rick.", "Sam", None,
+            service=service, target_list_id="list")
+
+        self.assertEqual(service.task_api.updated, [])
+        self.assertFalse(hasattr(service.task_api, "inserted"))
+
+    def test_google_overdue_adds_task_when_none_exists(self):
+        service = FakeGoogleService([])
+
+        mark_due_book_overdue_google(
+            "The Demigod Diaries", "Riordan, Rick.", "Sam",
+            datetime(2026, 10, 22, tzinfo=UTC),
+            service=service, target_list_id="list")
+
+        self.assertEqual(
+            service.task_api.inserted["body"],
+            {
+                "title": "OVERDUE KCLS book due: The Demigod Diaries",
+                "notes": "Author: Riordan, Rick.\nAccount: Sam",
+                "due": "2026-10-22T00:00:00+00:00",
+            },
+        )
+
+    def test_todoist_overdue_renames_matching_due_task(self):
+        updated_tasks = []
+        added_tasks = []
+        task = SimpleNamespace(
+            id="due",
+            content="KCLS book due: The Demigod Diaries",
+            description="Author: Riordan, Rick.\nAccount: Sam",
+        )
+        api = SimpleNamespace(
+            add_task=lambda **kwargs: added_tasks.append(kwargs),
+            get_tasks=lambda project_id: [[task]],
+            update_task=lambda *args, **kwargs: updated_tasks.append(
+                (args, kwargs)),
+        )
+
+        mark_due_book_overdue_todoist(
+            "The Demigod Diaries", "Riordan, Rick.", "Sam", None,
+            api=api, target_project_id="project")
+
+        self.assertEqual(added_tasks, [])
+        self.assertEqual(
+            updated_tasks,
+            [(("due",),
+              {"content": "OVERDUE KCLS book due: The Demigod Diaries"})],
+        )
+
+    def test_todoist_overdue_adds_task_when_none_exists(self):
+        added_tasks = []
+        api = SimpleNamespace(
+            add_task=lambda **kwargs: added_tasks.append(kwargs),
+            get_tasks=lambda project_id: [[]],
+        )
+
+        mark_due_book_overdue_todoist(
+            "The Demigod Diaries", "Riordan, Rick.", "Sam",
+            datetime(2026, 10, 22, tzinfo=UTC),
+            api=api, target_project_id="project")
+
+        self.assertEqual(
+            added_tasks,
+            [{
+                "content": "OVERDUE KCLS book due: The Demigod Diaries",
+                "description": "Author: Riordan, Rick.\nAccount: Sam",
+                "project_id": "project",
+                "due_date": date(2026, 10, 22),
+            }],
+        )
+
+    def test_google_checkin_completes_overdue_task(self):
+        service = FakeGoogleService([{
+            "id": "overdue",
+            "title": "OVERDUE KCLS book due: The Demigod Diaries",
+            "notes": "Account: Sam",
+        }])
+
+        complete_due_book_google(
+            "The Demigod Diaries", "Sam",
+            service=service, target_list_id="list")
+
+        self.assertEqual(service.task_api.completed, ["overdue"])
+
+    def test_todoist_checkin_completes_overdue_task(self):
+        completed = []
+        task = SimpleNamespace(
+            id="overdue",
+            content="OVERDUE KCLS book due: The Demigod Diaries",
+            description="Account: Sam",
+        )
+        api = SimpleNamespace(
+            get_tasks=lambda project_id: [[task]],
+            complete_task=completed.append,
+        )
+
+        complete_due_book_todoist(
+            "The Demigod Diaries", "Sam",
+            api=api, target_project_id="project")
+
+        self.assertEqual(completed, ["overdue"])
+
+    def test_google_renewal_clears_overdue_title(self):
+        service = FakeGoogleService([{
+            "id": "overdue",
+            "title": "OVERDUE KCLS book due: The Demigod Diaries",
+            "notes": "Account: Sam",
+        }])
+
+        update_due_book_google(
+            "The Demigod Diaries", "Sam", datetime(2026, 11, 12),
+            service=service, target_list_id="list")
+
+        self.assertEqual(
+            service.task_api.updated[0]["body"],
+            {
+                "title": "KCLS book due: The Demigod Diaries",
+                "due": "2026-11-12T00:00:00",
+            },
+        )
+
+    def test_todoist_renewal_clears_overdue_title(self):
+        updates = []
+        task = SimpleNamespace(
+            id="overdue",
+            content="OVERDUE KCLS book due: The Demigod Diaries",
+            description="Account: Sam",
+        )
+        api = SimpleNamespace(
+            get_tasks=lambda project_id: [[task]],
+            update_task=lambda *args, **kwargs: updates.append((args, kwargs)),
+        )
+
+        update_due_book_todoist(
+            "The Demigod Diaries", "Sam", datetime(2026, 11, 12),
+            api=api, target_project_id="project")
+
+        self.assertEqual(
+            updates,
+            [(("overdue",), {
+                "content": "KCLS book due: The Demigod Diaries",
+                "due_date": date(2026, 11, 12),
+            })],
         )
 
     def test_todoist_hold_includes_library_address_in_description(self):
@@ -778,6 +969,42 @@ class TaskMatchingBackendTests(unittest.TestCase):
         update.assert_called_once()
         self.assertEqual(update.call_args.args[1]["title"], "A Book")
         self.assertEqual(update.call_args.args[1]["user"], "Sam")
+
+    def test_overdue_email_marks_each_book_and_records_event(self):
+        message = self.make_message(
+            "Account:\n123\nTitle\nThe Demigod Diaries\nDue by\n"
+            "Thursday, October 22nd\nAuthor\nRiordan, Rick.\n",
+            subject="Your Item(s) are Overdue at King County Library System",
+        )
+        store = []
+        mail = SimpleNamespace(
+            store=lambda email_id, *args: store.append(email_id))
+
+        with patch("kcls_parser.fetch_message", return_value=message), \
+                patch("kcls_parser.record_library_event") as record_event, \
+                patch("kcls_parser.mark_overdue_in_task_manager") as overdue:
+            process_overdue_emails(mail, [b"1"], {"123": "Sam"}, "google")
+
+        overdue.assert_called_once()
+        book = overdue.call_args.args[1]
+        self.assertEqual(book["title"], "The Demigod Diaries")
+        self.assertEqual(book["author"], "Riordan, Rick.")
+        self.assertEqual(book["user"], "Sam")
+        self.assertEqual(record_event.call_args.args[0], "overdue")
+        self.assertEqual(store, [b"1"])
+
+    def test_unparseable_overdue_email_is_marked_read(self):
+        message = self.make_message("This is not an overdue notice")
+        store = []
+        mail = SimpleNamespace(
+            store=lambda email_id, *args: store.append(email_id))
+
+        with patch("kcls_parser.fetch_message", return_value=message), \
+                patch("kcls_parser.mark_overdue_in_task_manager") as overdue:
+            process_overdue_emails(mail, [b"1"], {}, "google")
+
+        overdue.assert_not_called()
+        self.assertEqual(store, [b"1"])
 
     def test_checkin_email_completes_each_returned_book(self):
         message = self.make_message(

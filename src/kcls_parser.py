@@ -34,6 +34,7 @@ from kcls_tasker_gtasks import (
     expire_hold_google,
     get_tasklist_id,
     get_tasklist_name,
+    mark_due_book_overdue_google,
     mark_hold_complete_google,
     update_due_book_google,
 )
@@ -45,6 +46,7 @@ from kcls_tasker_todoist import (
     expire_hold_todoist,
     get_project_id,
     get_project_name,
+    mark_due_book_overdue_todoist,
     mark_hold_complete_todoist,
     update_due_book_todoist,
 )
@@ -58,6 +60,7 @@ project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # These labels help tell an empty value apart from the next label.
 KNOWN_LABELS = (
     "Title", "Account:", "Author", "Pickup Location", "Pickup by", "Due Date",
+    "Due by",
 )
 TRACER_LOGGER_NAME = "kcls.tracer"
 RECORD_LOGGER_NAME = "kcls.records"
@@ -291,18 +294,23 @@ def fetch_message(mail, email_id):
     return email.message_from_bytes(raw_email_bytes, policy=policy.default)
 
 
-def parse_kcls_date(date_text):
+def parse_kcls_date(date_text, prefer_past=False):
     """Turn a KCLS date like "October 15, 2026" into a timezone-aware datetime.
 
     KCLS dates are in Seattle local time. Returns None if the text isn't a date.
+
+    Some emails leave out the year ("Thursday, October 22nd"). dateparser
+    then guesses the current year, which is wrong for an overdue date from
+    December read in January. prefer_past=True makes it pick last year.
     """
-    return dateparser.parse(
-        date_text,
-        settings={
-            'TIMEZONE': 'America/Los_Angeles',
-            'RETURN_AS_TIMEZONE_AWARE': True,
-        },
-    )
+    settings = {
+        'TIMEZONE': 'America/Los_Angeles',
+        'RETURN_AS_TIMEZONE_AWARE': True,
+    }
+    if prefer_past:
+        settings['PREFER_DATES_FROM'] = 'past'
+
+    return dateparser.parse(date_text, settings=settings)
 
 
 def parse_hold_email(message, user_mapping):
@@ -425,6 +433,47 @@ def parse_due_date_email(message, user_mapping):
         renewed_books.append(current_book)
 
     return renewed_books
+
+
+def parse_overdue_email(message, user_mapping):
+    """Parse overdue book titles, authors, users, and due dates from one email.
+
+    The layout matches the hold emails: an "Account:" line, then one block
+    per book with "Title", "Author" and "Due by" labels.
+    """
+    lines = [line.strip() for line in get_message_text(message).splitlines()]
+    overdue_books = []
+    current_book = {}
+    account_number = ""
+    user = resolve_user(message, user_mapping)
+
+    for index, current_line in enumerate(lines):
+        if current_line == "Title":
+            if "title" in current_book:
+                overdue_books.append(current_book)
+
+            current_book = {
+                "title": value_after(lines, index),
+                "author": "Unknown",
+                "account_number": account_number,
+                "user": user,
+                "due_date": None,
+            }
+        elif current_line == "Account:":
+            account_number = value_after(lines, index)
+            user = resolve_user(message, user_mapping, account_number)
+        elif current_line == "Author" and "title" in current_book:
+            current_book["author"] = value_after(lines, index) or "Unknown"
+        elif current_line == "Due by" and "title" in current_book:
+            due_date_text = value_after(lines, index)
+            # An overdue date is always in the past, see parse_kcls_date().
+            current_book["due_date"] = parse_kcls_date(
+                due_date_text, prefer_past=True)
+
+    if "title" in current_book:
+        overdue_books.append(current_book)
+
+    return overdue_books
 
 
 def parse_checkin_email(message):
@@ -631,6 +680,16 @@ def search_unread_due_dates(mail):
     )
 
 
+def search_unread_overdue(mail):
+    """Search for unread KCLS overdue notices."""
+    return search_unread_emails(
+        mail,
+        from_address="noreply@kcls.org",
+        subject_query='(SUBJECT "Overdue")',
+        email_kind="overdue",
+    )
+
+
 def search_unread_checkins(mail):
     """Find unread KCLS emails about returned books."""
     return search_unread_emails(
@@ -778,6 +837,23 @@ def update_due_book_in_task_manager(task_manager, book, task_context=None):
         else update_due_book_google
     )
     update_fn(**task_arguments)
+
+
+def mark_overdue_in_task_manager(task_manager, book, task_context=None):
+    """Mark one book's due-date task as overdue (or add it if missing)."""
+    validate_task_manager(task_manager)
+
+    task_arguments = add_task_context({
+        'book_title': book['title'],
+        'author': book['author'],
+        'account_user': book['user'],
+        'due_datetime': book['due_date'],
+    }, task_context)
+    overdue_fn = (
+        mark_due_book_overdue_todoist if task_manager == 'todoist'
+        else mark_due_book_overdue_google
+    )
+    overdue_fn(**task_arguments)
 
 
 def complete_due_book_in_task_manager(
@@ -983,6 +1059,70 @@ def process_due_date_emails(
                 "Failed to process renewal email %s", email_id)
 
 
+def process_overdue_emails(
+        mail, email_ids, user_mapping, task_manager, task_context=None):
+    """Parse overdue notices and mark their due-date tasks as overdue."""
+    if not email_ids:
+        get_tracer_logger().info("No unread KCLS overdue emails found!")
+        return
+
+    get_tracer_logger().info(
+        "Found %s unread overdue email(s)", len(email_ids))
+
+    for email_id in email_ids:
+        try:
+            message = fetch_message(mail, email_id)
+            if message is None:
+                continue
+
+            get_tracer_logger().info(
+                "Processing overdue email: %s", message['subject'])
+            overdue_books = parse_overdue_email(message, user_mapping)
+
+            if not overdue_books:
+                get_tracer_logger().error(
+                    "No overdue books could be parsed from email: %s; "
+                    "marking it as read to prevent repeated retries",
+                    message['subject'],
+                )
+                mail.store(email_id, '+FLAGS', '\\Seen')
+                continue
+
+            for book in overdue_books:
+                if not book['title'].strip():
+                    get_tracer_logger().warning(
+                        "Skipping overdue book with an empty title in "
+                        "email: %s",
+                        message['subject'],
+                    )
+                    continue
+
+                get_tracer_logger().info(
+                    "Overdue: %s by %s for %s, was due %s",
+                    book['title'],
+                    book['author'],
+                    book['user'],
+                    book['due_date'],
+                )
+                record_library_event(
+                    "overdue",
+                    {
+                        "title": book['title'],
+                        "author": book['author'],
+                        "account_number": book['account_number'],
+                        "user": book['user'],
+                        "due_date": book['due_date'],
+                    },
+                )
+                mark_overdue_in_task_manager(task_manager, book, task_context)
+
+            mail.store(email_id, '+FLAGS', '\\Seen')
+            get_tracer_logger().info("Overdue email marked as read")
+        except Exception:  # noqa: BLE001
+            get_tracer_logger().exception(
+                "Failed to process overdue email %s", email_id)
+
+
 def process_checkin_emails(
         mail, email_ids, user_mapping, task_manager, task_context=None):
     """Parse returned books and complete their existing due-date tasks."""
@@ -1126,11 +1266,12 @@ def main():
             return
         hold_email_ids = search_unread_holds(mail)
         receipt_email_ids = search_unread_receipts(mail)
+        overdue_email_ids = search_unread_overdue(mail)
         due_date_email_ids = search_unread_due_dates(mail)
         checkin_email_ids = search_unread_checkins(mail)
         task_context = None
-        if (hold_email_ids or receipt_email_ids or due_date_email_ids or
-                checkin_email_ids):
+        if (hold_email_ids or receipt_email_ids or overdue_email_ids or
+                due_date_email_ids or checkin_email_ids):
             try:
                 task_context = create_task_manager_context(
                     task_manager, google_creds)
@@ -1152,6 +1293,15 @@ def main():
         process_receipt_emails(
             mail,
             receipt_email_ids,
+            user_mapping,
+            task_manager,
+            task_context,
+        )
+        # Overdue notices run before renewals and check-ins, so a book that
+        # was renewed or returned since its notice ends up in the right state.
+        process_overdue_emails(
+            mail,
+            overdue_email_ids,
             user_mapping,
             task_manager,
             task_context,

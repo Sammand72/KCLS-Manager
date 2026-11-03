@@ -22,12 +22,15 @@ from kcls_parser import (
     parse_checkout_receipt,
     parse_due_date_email,
     parse_hold_email,
+    parse_kcls_date,
+    parse_overdue_email,
     record_library_event,
     resolve_user,
     search_unread_checkins,
     search_unread_due_dates,
     search_unread_emails,
     search_unread_holds,
+    search_unread_overdue,
     search_unread_receipts,
     validate_email_login_type,
     validate_task_manager,
@@ -190,6 +193,55 @@ You checked out the following items:
             [book["title"] for book in books],
             ["First Renewed Book", "Second Renewed Book"],
         )
+
+    def test_parse_overdue_html_email(self):
+        # Same label layout as the real KCLS overdue notice.
+        message = self.make_message(
+            "<p>Item(s) Overdue:</p>"
+            "<p><strong>Account:</strong> 12345</p>"
+            "<p>Title</p><p>The Demigod Diaries</p>"
+            "<p>Call Number</p><p>Y RIORDAN</p>"
+            "<p>Due by</p><p>Thursday, October 22nd</p>"
+            "<p>Author</p><p>Riordan, Rick.</p>"
+            "<p>Item Barcode</p><p>2143319040</p>",
+            content_type="text/html",
+        )
+
+        books = parse_overdue_email(message, {"12345": "Sam"})
+
+        self.assertEqual(len(books), 1)
+        self.assertEqual(books[0]["title"], "The Demigod Diaries")
+        self.assertEqual(books[0]["author"], "Riordan, Rick.")
+        self.assertEqual(books[0]["account_number"], "12345")
+        self.assertEqual(books[0]["user"], "Sam")
+        self.assertEqual(books[0]["due_date"].month, 10)
+        self.assertEqual(books[0]["due_date"].day, 22)
+
+    def test_parse_multiple_overdue_books_and_blank_author(self):
+        message = self.make_message(
+            "<p>Account:</p><p>12345</p>"
+            "<p>Title</p><p>First Book</p>"
+            "<p>Due by</p><p>Thursday, October 22nd</p>"
+            "<p>Author</p>"
+            "<p>Title</p><p>Second Book</p>"
+            "<p>Due by</p><p>Friday, October 23rd</p>"
+            "<p>Author</p><p>Someone</p>",
+            content_type="text/html",
+        )
+
+        books = parse_overdue_email(message, {})
+
+        self.assertEqual(
+            [book["title"] for book in books], ["First Book", "Second Book"])
+        self.assertEqual(
+            [book["author"] for book in books], ["Unknown", "Someone"])
+
+    def test_yearless_overdue_date_is_never_in_the_future(self):
+        # Whatever today is, an overdue date must land on or before it.
+        now = datetime.now().astimezone()
+        for date_text in ("January 2nd", "June 15th", "December 29th"):
+            parsed = parse_kcls_date(date_text, prefer_past=True)
+            self.assertLessEqual(parsed, now, date_text)
 
     def test_parse_checkin_email_books_between_dashes(self):
         message = self.make_message(
@@ -435,6 +487,16 @@ Author:
         self.assertIn('SUBJECT "Hold Has Expired"', search_text)
         self.assertIn('SUBJECT "Holds have expired"', search_text)
 
+    def test_overdue_search_uses_kcls_sender_and_subject(self):
+        searches = []
+        mail = SimpleNamespace(
+            search=lambda *args: (searches.append(args) or ("OK", [b"7"])))
+
+        self.assertEqual(search_unread_overdue(mail), [b"7"])
+        search_text = " ".join(str(argument) for argument in searches[0])
+        self.assertIn('FROM "noreply@kcls.org"', search_text)
+        self.assertIn('SUBJECT "Overdue"', search_text)
+
     def test_imap_login_succeeds_on_first_attempt(self):
         from kcls_parser import login_to_gmail
 
@@ -609,6 +671,7 @@ Author:
             patch("kcls_parser.login_to_gmail_oauth") as oauth_login_mock,
             patch("kcls_parser.search_unread_holds", return_value=[b"1"]),
             patch("kcls_parser.search_unread_receipts", return_value=[]),
+            patch("kcls_parser.search_unread_overdue", return_value=[]),
             patch("kcls_parser.search_unread_due_dates", return_value=[]),
             patch("kcls_parser.search_unread_checkins", return_value=[]),
             patch("kcls_parser.load_user_mapping", return_value={}),
@@ -674,6 +737,7 @@ Author:
             patch("kcls_parser.login_to_gmail"),
             patch("kcls_parser.search_unread_holds", return_value=[b"1"]),
             patch("kcls_parser.search_unread_receipts", return_value=[]),
+            patch("kcls_parser.search_unread_overdue", return_value=[]),
             patch("kcls_parser.search_unread_due_dates", return_value=[]),
             patch("kcls_parser.search_unread_checkins", return_value=[]),
             patch("kcls_parser.load_user_mapping", return_value={}) as user_loader,

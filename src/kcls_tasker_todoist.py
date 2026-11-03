@@ -9,10 +9,12 @@ from kcls_secrets import get_secret
 from kcls_task_matching import (
     DUE_TASK_TITLE_PREFIX,
     EXPIRED_TASK_TITLE_PREFIX,
+    OVERDUE_TASK_TITLE_PREFIX,
     TASK_TITLE_PREFIX,
     build_due_notes,
     build_hold_notes,
     is_same_task,
+    strip_due_task_prefix,
     strip_task_prefix,
     titles_match,
     users_match,
@@ -212,21 +214,17 @@ def add_due_book_to_todoist(
     TRACER_LOGGER.info("Todoist due-date task created successfully")
 
 
-def update_due_book_todoist(
-        book_title, account_user, due_datetime, api=None,
-        target_project_id=None):
-    """Update the matching open Todoist due-date task.
+def find_due_task_todoist(api, target_project_id, book_title, account_user):
+    """Return the open due-date task (overdue or not) for a book, or None.
 
     A task for the same account user is preferred, but any task with a
     matching title is used as a fallback. Renewal emails don't include a
-    card number, so the user often falls back to the shared email address,
-    which won't match the name the checkout receipt stored on the task.
+    card number, and a shared email address can't always tell family
+    members apart, so the user may not match the name on the task.
     """
-    api, target_project_id = resolve_todoist_target(api, target_project_id)
-
     title_matches = []
     for task in iter_open_todoist_tasks(api, target_project_id):
-        task_title = strip_task_prefix(task.content, DUE_TASK_TITLE_PREFIX)
+        task_title = strip_due_task_prefix(task.content)
         if task_title is None:
             continue
 
@@ -236,19 +234,44 @@ def update_due_book_todoist(
             title_matches.append(task)
 
     # next() returns the first task for this user, or None if there isn't one.
-    task_to_update = next(
+    task_for_user = next(
         (
             task for task in title_matches
             if users_match(account_user, getattr(task, 'description', ''))
         ),
         None,
     )
-    if task_to_update is None and title_matches:
-        task_to_update = title_matches[0]
+    if task_for_user is not None:
+        return task_for_user
+
+    if title_matches:
+        return title_matches[0]
+
+    return None
+
+
+def update_due_book_todoist(
+        book_title, account_user, due_datetime, api=None,
+        target_project_id=None):
+    """Update the matching open Todoist due-date task.
+
+    A renewed book is no longer overdue, so an "OVERDUE" title is also
+    switched back to the normal due-date title.
+    """
+    api, target_project_id = resolve_todoist_target(api, target_project_id)
+
+    task_to_update = find_due_task_todoist(
+        api=api,
+        target_project_id=target_project_id,
+        book_title=book_title,
+        account_user=account_user,
+    )
 
     if task_to_update is not None:
+        task_title = strip_due_task_prefix(task_to_update.content)
         api.update_task(
             task_to_update.id,
+            content=f"{DUE_TASK_TITLE_PREFIX}{task_title}",
             due_date=due_datetime.date(),
         )
         TRACER_LOGGER.info(
@@ -257,6 +280,55 @@ def update_due_book_todoist(
 
     TRACER_LOGGER.info(
         "No matching Todoist due task found to renew for '%s'", book_title)
+
+
+def mark_due_book_overdue_todoist(
+        book_title, author, account_user, due_datetime, api=None,
+        target_project_id=None):
+    """Rename a book's due-date task to "OVERDUE ...", or add one if missing.
+
+    A task is added when there is nothing to rename, for example a book
+    that was checked out before this script was set up.
+    """
+    api, target_project_id = resolve_todoist_target(api, target_project_id)
+
+    existing_task = find_due_task_todoist(
+        api=api,
+        target_project_id=target_project_id,
+        book_title=book_title,
+        account_user=account_user,
+    )
+
+    if existing_task is not None:
+        # strip_task_prefix returns None unless the title has this prefix.
+        if strip_task_prefix(
+                existing_task.content, OVERDUE_TASK_TITLE_PREFIX) is not None:
+            TRACER_LOGGER.info(
+                "'%s' is already marked overdue in Todoist",
+                existing_task.content)
+            return
+
+        task_title = strip_due_task_prefix(existing_task.content)
+        overdue_title = f"{OVERDUE_TASK_TITLE_PREFIX}{task_title}"
+        api.update_task(existing_task.id, content=overdue_title)
+        TRACER_LOGGER.info(
+            "Renamed '%s' to '%s' in Todoist",
+            existing_task.content, overdue_title)
+        return
+
+    # .date() chops the time part off the datetime
+    due_date = None
+    if due_datetime is not None:
+        due_date = due_datetime.date()
+
+    TRACER_LOGGER.info("Pushing overdue '%s' to Todoist", book_title)
+    api.add_task(
+        content=f"{OVERDUE_TASK_TITLE_PREFIX}{book_title}",
+        description=build_due_notes(author=author, account_user=account_user),
+        project_id=target_project_id,
+        due_date=due_date
+    )
+    TRACER_LOGGER.info("Todoist overdue task created successfully")
 
 
 def mark_hold_complete_todoist(
@@ -290,35 +362,15 @@ def mark_hold_complete_todoist(
 def complete_due_book_todoist(
         book_title, account_user="Unknown user", api=None,
         target_project_id=None):
-    """Find a matching open due-date task and mark it complete.
-
-    A task for the same account user is preferred, but any task with a
-    matching title is used as a fallback, because a shared email address
-    can't always tell family members apart.
-    """
+    """Find a matching open due-date task (overdue or not) and complete it."""
     api, target_project_id = resolve_todoist_target(api, target_project_id)
 
-    title_matches = []
-    for task in iter_open_todoist_tasks(api, target_project_id):
-        task_title = strip_task_prefix(task.content, DUE_TASK_TITLE_PREFIX)
-        if task_title is None:
-            continue
-
-        if titles_match(
-                checkout_title=task_title,
-                hold_title=book_title):
-            title_matches.append(task)
-
-    # next() returns the first task for this user, or None if there isn't one.
-    task_to_complete = next(
-        (
-            task for task in title_matches
-            if users_match(account_user, getattr(task, 'description', ''))
-        ),
-        None,
+    task_to_complete = find_due_task_todoist(
+        api=api,
+        target_project_id=target_project_id,
+        book_title=book_title,
+        account_user=account_user,
     )
-    if task_to_complete is None and title_matches:
-        task_to_complete = title_matches[0]
 
     if task_to_complete is not None:
         api.complete_task(task_to_complete.id)

@@ -16,6 +16,7 @@ A headless Python automation script that silently monitors an email inbox for Ki
 * Creates due-date tasks for all books on a checkout receipt, including books that were not holds
 * Auto-completes hold tasks when the corresponding book shows up on a checkout receipt
 * Auto-updates due tasks when renewal emails show up, and completes the task when there is a check-in email
+* Renames due tasks to `OVERDUE KCLS book due: ...` when an overdue notice arrives (or adds one if the book had no task yet)
 * Attributes every email to a family member by the address it was sent to, so several family members can auto-forward their KCLS emails into one inbox
 * Designed to run on startup via Windows Task Scheduler/Linux Cron with separate library records and operational logs.
 

@@ -7,6 +7,7 @@ UNKNOWN_USER = "unknown user"
 TASK_TITLE_PREFIX = "KCLS book pickup: "
 EXPIRED_TASK_TITLE_PREFIX = "EXPIRED KCLS book pickup: "
 DUE_TASK_TITLE_PREFIX = "KCLS book due: "
+OVERDUE_TASK_TITLE_PREFIX = "OVERDUE KCLS book due: "
 
 
 def strip_task_prefix(task_title, prefix):
@@ -20,6 +21,22 @@ def strip_task_prefix(task_title, prefix):
         return None
 
     return stripped_title[len(prefix):]
+
+
+def strip_due_task_prefix(task_title):
+    """Return the book title of a due-date task, overdue or not, else None.
+
+    An overdue book is still a due-date task: a check-in should complete it
+    and a renewal should update it, so both prefixes count here.
+    """
+    # The overdue prefix is checked first only to keep the order obvious;
+    # the two prefixes start differently, so they can never both match.
+    for prefix in (OVERDUE_TASK_TITLE_PREFIX, DUE_TASK_TITLE_PREFIX):
+        book_title = strip_task_prefix(task_title, prefix)
+        if book_title is not None:
+            return book_title
+
+    return None
 
 
 def build_hold_notes(author, location, address, account_user):

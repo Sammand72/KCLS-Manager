@@ -9,8 +9,9 @@ It currently supports:
 - **Hold ready for pickup**: creates a pickup task with author, library branch, street address, account user, and due date.
 - **Hold expired**: updates/renames existing hold pickup tasks to mark them as `[EXPIRED]`.
 - **Checkout receipts**: creates `KCLS book due:` tasks for all checked-out books (including books that were never holds) and auto-completes matching open hold tasks.
-- **Due date renewals**: updates the due date on existing open due-date tasks.
-- **Check-in receipts**: auto-completes open due-date tasks when books are returned.
+- **Overdue notices**: renames the open due-date task to `OVERDUE KCLS book due: ...`, or adds one if the book has no due task yet.
+- **Due date renewals**: updates the due date on existing open due-date tasks (and clears the `OVERDUE` mark).
+- **Check-in receipts**: auto-completes open due-date tasks (overdue or not) when books are returned.
 
 The owner is learning Python with this project. Favor the codebase's existing plain, heavily-commented style over clever abstractions — see "Conventions to preserve" below.
 
@@ -18,11 +19,11 @@ The owner is learning Python with this project. Favor the codebase's existing pl
 
 Six core Python modules in [src/](src/), plus the test suite. Config and data files (`.env`, `credentials.json`, `token.json`, `users.json`, `library_locations.json`, logs) stay in the project root; each module finds them through its `project_dir` variable (the folder above `src/`).
 
-- [src/kcls_parser.py](src/kcls_parser.py) — Main entrypoint. Connects to Gmail over IMAP, searches the inbox for unread KCLS emails (holds, checkout receipts, renewals, check-ins), parses message bodies into structured records, updates/creates tasks, logs library events to `library_records.jsonl`, and marks emails as read.
+- [src/kcls_parser.py](src/kcls_parser.py) — Main entrypoint. Connects to Gmail over IMAP, searches the inbox for unread KCLS emails (holds, checkout receipts, overdue notices, renewals, check-ins), parses message bodies into structured records, updates/creates tasks, logs library events to `library_records.jsonl`, and marks emails as read.
 - [src/kcls_google_auth.py](src/kcls_google_auth.py) — Shared Google sign-in. `get_google_credentials(include_gmail, include_tasks)` loads/refreshes `token.json` or opens the browser OAuth flow using `credentials.json`, re-asking when a saved token lacks a needed scope. `get_google_email()` reads the signed-in address for IMAP XOAUTH2 login.
 - [src/kcls_secrets.py](src/kcls_secrets.py) — Secret storage. `get_secret(name)` reads `TODOIST_API_TOKEN`, `EMAIL_USER`, `EMAIL_PASS` from `.env` (`SECRET_STORAGE=file`, the default) or from the OS keychain via the `keyring` library (`SECRET_STORAGE=keychain`, service name `KCLS-manager`). Also holds the Google token as `GOOGLE_TOKEN` in keychain mode. Run directly (`python src/kcls_secrets.py set|delete|status`) to manage keychain entries.
-- [src/kcls_tasker_gtasks.py](src/kcls_tasker_gtasks.py) — Google Tasks integration. Builds the Tasks API client from shared Google credentials, resolves the target tasklist by name (`GOOGLE_TASKLIST_NAME`), inserts hold and due tasks, renames expired holds, updates renewed due dates, and marks completed tasks.
-- [src/kcls_tasker_todoist.py](src/kcls_tasker_todoist.py) — Todoist integration. Authenticates with a static API token (`TODOIST_API_TOKEN`), resolves the target project by name (`TODOIST_PROJECT_NAME`), inserts hold and due tasks, renames expired holds, updates renewed due dates, and marks completed tasks.
+- [src/kcls_tasker_gtasks.py](src/kcls_tasker_gtasks.py) — Google Tasks integration. Builds the Tasks API client from shared Google credentials, resolves the target tasklist by name (`GOOGLE_TASKLIST_NAME`), inserts hold and due tasks, renames expired holds and overdue books, updates renewed due dates, and marks completed tasks.
+- [src/kcls_tasker_todoist.py](src/kcls_tasker_todoist.py) — Todoist integration. Authenticates with a static API token (`TODOIST_API_TOKEN`), resolves the target project by name (`TODOIST_PROJECT_NAME`), inserts hold and due tasks, renames expired holds and overdue books, updates renewed due dates, and marks completed tasks.
 - [src/kcls_task_matching.py](src/kcls_task_matching.py) — Shared title and user normalization and matching logic. Handles substring matching for truncated KCLS titles (requiring >= 10 characters) and validates account user attribution.
 - [tests/](tests/) — Unit test suite with offline mocks:
   - `tests/test_kcls_parser.py` — Tests IMAP connection retry/fail logic, logging, location address loading, and body parsing for all email types.
@@ -43,7 +44,7 @@ Six core Python modules in [src/](src/), plus the test suite. Config and data fi
 | `token.json` | The user's personal Google sign-in (refresh token), auto-generated on first run by `get_google_credentials()`. With `SECRET_STORAGE=keychain` it lives in the OS keychain instead (an existing file is moved in once and deleted) | No (gitignored) |
 | `users.json` | Flat map of recipient email address (or, for shared addresses, library card number) → name. A blank name means the email itself is the label. Used to attribute every email to a family member | No (gitignored) |
 | `library_locations.json` | List of KCLS branch names and street addresses used to enrich hold tasks with branch addresses | Yes |
-| `library_records.jsonl` | Append-only event history (holds, checkouts, renewals, check-ins), one JSON object per line | No (gitignored) |
+| `library_records.jsonl` | Append-only event history (holds, checkouts, overdue notices, renewals, check-ins), one JSON object per line | No (gitignored) |
 | `library_tracer.log` | Operational log output from the parser and task managers | No (gitignored) |
 
 Keep real secrets and personal data out of any committed files or templates.
@@ -84,12 +85,13 @@ One-time setup in the Google Cloud project behind `credentials.json` (README →
 
 ## Parsing behavior and search criteria
 
-The script executes 4 distinct IMAP search passes for unread emails (`UNSEEN`):
+The script executes 5 distinct IMAP search passes for unread emails (`UNSEEN`):
 
 1. **Holds**: `FROM "noreply@kcls.org"` matching subjects `"Hold is Ready"`, `"Holds are Ready"`, `"Hold Has Expired"`, or `"Holds have expired"`.
 2. **Checkout receipts**: `FROM "noreply@kcls.org"` matching subject `"Checkout Receipt"`.
-3. **Due date renewals**: `FROM "noreply@kcls.org"` matching subject `"Due Dates from King County Library System"`.
-4. **Check-in returns**: `FROM "No-Reply-AMH-Notify@kcls.org"` matching subjects `"Checkin"` or `"Items Returned Receipt"`.
+3. **Overdue notices**: `FROM "noreply@kcls.org"` matching subject `"Overdue"` (e.g. "Your Item(s) are Overdue at King County Library System"). Same label layout as hold emails (`Account:`, `Title`, `Author`, `Due by`); the `Due by` date has no year, so it is parsed preferring past dates.
+4. **Due date renewals**: `FROM "noreply@kcls.org"` matching subject `"Due Dates from King County Library System"`.
+5. **Check-in returns**: `FROM "No-Reply-AMH-Notify@kcls.org"` matching subjects `"Checkin"` or `"Items Returned Receipt"`.
 
 - All matching unread emails are processed oldest-to-newest and marked as `\Seen` once handled.
 - If an email cannot be parsed (e.g. empty or unexpected format), an error is logged and the email is marked as read to prevent endless retry loops on subsequent runs.
